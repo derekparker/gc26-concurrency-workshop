@@ -1,4 +1,4 @@
-# Exercise 2: Catch It in the Act — the Flight Recorder (~25 min)
+# Exercise 2: Catch It in the Act, the Flight Recorder (~25 min)
 
 ## Symptom
 A long-running lookup service. Eight workers, an in-memory cache, sub-ms
@@ -6,7 +6,7 @@ requests, p99 SLO of 50ms. And an on-call report that reads: *"a couple of
 times an hour a burst of requests takes 250ms+. Can't reproduce it. By the
 time we see it on the dashboard, it's over."*
 
-Run it (takes 12 seconds — a compressed stand-in for hours of production):
+Run it (takes 12 seconds, a compressed stand-in for hours of production):
 
 ```bash
 go run main.go
@@ -21,16 +21,16 @@ SLOW request: 270.927667ms (threshold 100ms)   <- 8 of these, then...
 2139 requests | avg    1.2ms | max 269.45ms    <- ...back to normal
 ```
 
-You could wrap the whole run in `trace.Start` — but pretend this is a real
+You could wrap the whole run in `trace.Start`, but pretend this is a real
 service: hours of uptime at MB/s of trace data. You need the trace of *the
 five seconds around the spike*, captured *after* you notice the spike
-happened. That's `runtime/trace.FlightRecorder` (official API since Go 1.25 —
+happened. That's `runtime/trace.FlightRecorder` (official API since Go 1.25,
 if you find `golang.org/x/exp/trace.NewFlightRecorder` in a blog post, that's
 the pre-1.25 experiment; don't use it).
 
 The flight recorder keeps a moving window of the most recent trace data in an
 in-memory ring buffer. It costs ~1–2% CPU, writes nothing to disk, and on
-demand dumps the window — i.e. *the recent past* — to a file.
+demand dumps the window, i.e. *the recent past*, to a file.
 
 ## Your Task
 1. **TODO 1** in `main.go`: create and start a flight recorder.
@@ -45,7 +45,7 @@ demand dumps the window — i.e. *the recent past* — to a file.
    to look at; expect busy services to produce roughly 2–10 MB/s of trace, so
    size `MaxBytes` accordingly (it wins over `MinAge`; both are hints).
 2. **TODO 2**: in the worker's slow-request branch, snapshot the recorder to
-   `flightrecorder.trace` — **exactly once** (`sync.Once`), in a fresh
+   `flightrecorder.trace`, **exactly once** (`sync.Once`), in a fresh
    goroutine so the worker isn't stalled, and guarded by `fr.Enabled()`.
    This detect-then-`WriteTo` pattern is the whole point: the trigger fires
    *after* the interesting behavior, and the buffer still contains it.
@@ -53,17 +53,17 @@ demand dumps the window — i.e. *the recent past* — to a file.
    ```bash
    go tool trace flightrecorder.trace
    ```
-4. Explain the spike. Not "requests got slow" — *which goroutine did what to
+4. Explain the spike. Not "requests got slow", *which goroutine did what to
    whom*.
 
 ## What You Should See in the Snapshot
-- The snapshot covers only the last ~5s of the run — you shipped a few
+- The snapshot covers only the last ~5s of the run, you shipped a few
   hundred KB instead of a whole-run trace, and it contains the incident.
 - **View trace by proc**: seconds of normal request confetti, then a ~270ms
   stretch where the request rows go quiet and one goroutine runs
   uninterrupted. Click it: `main.(*service).refresher`, inside a
   `refresh cache` region.
-- **Goroutine analysis**: `main.(*service).worker` (Count 8) — with a large
+- **Goroutine analysis**: `main.(*service).worker` (Count 8), with a large
   **Block time (sync)**; `main.(*service).refresher` with ~270ms of
   execution.
 - **Synchronization blocking profile**: ~2s of cumulative delay (8 workers ×
@@ -147,16 +147,16 @@ s.cache = next
 s.mu.Unlock()
 ```
 
-(This requires moving the locking out of `refresh` — the incremental path
+(This requires moving the locking out of `refresh`, the incremental path
 still wants the lock during its writes.) Re-run with your recorder still in
 place: no SLOW lines, no snapshot fires. Absence of the trigger is now
 evidence of the fix.
 </details>
 
 ## What This Teaches
-Rare events are the tracer's hardest problem — you never have a trace running
+Rare events are the tracer's hardest problem, you never have a trace running
 when they happen. The flight recorder inverts the game: trace *always*, keep
 *almost nothing*, and let the anomaly itself decide when to persist the
 evidence. A snapshot like this, attached to an incident ticket, is ground
-truth that a teammate — or an AI agent doing the follow-up — can reason from
+truth that a teammate, or an AI agent doing the follow-up, can reason from
 without access to the running system.

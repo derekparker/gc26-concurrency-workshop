@@ -40,7 +40,7 @@ main.(*Pipeline).SendOrder(...)
 ...four more screens of stack traces...
 ```
 
-**Teaching beat:** the Go runtime *did* detect this deadlock — but only
+**Teaching beat:** the Go runtime *did* detect this deadlock, but only
 because literally every goroutine was asleep. One background ticker, one
 open network connection, one `time.Sleep` anywhere, and this program would
 have hung silently forever (exercise 1 does exactly that). And even when
@@ -59,7 +59,7 @@ dlv exec ./pipeline
 > here too; `dlv exec` on a `-N -l` build mirrors how you'd debug a binary
 > you built in CI. If you debug a *production* binary built with default
 > flags, expect `Warning: debugging optimized function` and some
-> `<optimized out>` variables — Delve copes, but locals get fuzzy.
+> `<optimized out>` variables, Delve copes, but locals get fuzzy.
 
 ```
 (dlv) continue
@@ -73,7 +73,7 @@ Let it run. After ~2.5s Delve stops **automatically**:
 ```
 
 Delve pre-sets internal breakpoints on `runtime-fatal-throw` and
-`unrecovered-panic`, so a fatal error is not a crash — it's a **breakpoint**.
+`unrecovered-panic`, so a fatal error is not a crash, it's a **breakpoint**.
 The process is frozen at the instant of death, with all state intact.
 
 **Teaching beat:** for a program that hangs *without* the runtime noticing
@@ -96,11 +96,11 @@ in Delve, or by attaching to the running process with `dlv attach <pid>`.
 ```
 
 `-with user` hides runtime housekeeping goroutines (GC, finalizer, ...).
-Plain `goroutines` shows everything — worth showing once so students see
+Plain `goroutines` shows everything, worth showing once so students see
 what gets filtered.
 
 Read the wait reasons out loud: **every single user goroutine is in
-`chan send`**. Even `main` — it never reached its own timeout logic; it's
+`chan send`**. Even `main`, it never reached its own timeout logic; it's
 wedged inside `SendOrder` on order 18.
 
 For programs with hundreds of goroutines, group instead of read:
@@ -123,7 +123,7 @@ For programs with hundreds of goroutines, group instead of read:
 ```
 
 One line per *place* the program is stuck, with counts. This is the single
-highest-value command for concurrency debugging — in a real service this
+highest-value command for concurrency debugging, in a real service this
 turns 400 goroutines into 6 lines.
 
 The pipeline also labels its workers with pprof labels
@@ -144,7 +144,7 @@ job=validator
 ```
 
 **Ask the room:** what's missing from that list? There is no `job=shipper`
-group. The shipper is *gone* — remember that for step 5.
+group. The shipper is *gone*, remember that for step 5.
 
 (Also available: `goroutines -l` to print labels inline, and
 `goroutines -with label job=processor` to filter by label.)
@@ -178,7 +178,7 @@ Move to the first *user* frame and look around:
 ```
 
 Main is stuck submitting **order 18 of 25**. You can evaluate any
-expression in this goroutine's context — `args`, `locals`, `print p`, all
+expression in this goroutine's context, `args`, `locals`, `print p`, all
 scoped to frame 3.
 
 > Shortcut: `goroutine <id> <command>` runs a command on another goroutine
@@ -237,17 +237,17 @@ Goroutines waiting on this channel:
 
 Vocabulary for the room:
 
-- `qcount` / `dataqsiz` — items buffered / buffer capacity (0/0: unbuffered)
-- `sendq` / `recvq` — queues of goroutines parked on send/receive (`sudog`
+- `qcount` / `dataqsiz`, items buffered / buffer capacity (0/0: unbuffered)
+- `sendq` / `recvq`, queues of goroutines parked on send/receive (`sudog`
   is the runtime's "goroutine waiting on a synchronization object" record)
-- `closed` — 0 or 1
+- `closed`, 0 or 1
 
 The verdict is written in the struct: **two senders queued, `recvq`
 empty**. Nobody will ever receive on `shipping` again.
 
 ## Step 5: The Root Cause (~3 min)
 
-Who was supposed to receive on `shipping`? The shipper — which step 2
+Who was supposed to receive on `shipping`? The shipper, which step 2
 showed no longer exists. It shipped its self-imposed maximum of 10 orders
 and returned (`pipeline.go:141`, `for shipped < 10`). The last log line
 before the freeze says exactly that:
@@ -264,14 +264,14 @@ Chain of causality, backwards from the missing goroutine:
 4. receiver blocks sending to `validation` → nobody receives on `incoming`
 5. main blocks in `SendOrder` on order 18 → deadlock
 
-**The fixes** (discuss, don't dwell — exercise time is more valuable):
+**The fixes** (discuss, don't dwell, exercise time is more valuable):
 
 - The real bug is *lifecycle*, not buffering: the shipper must drain the
   channel until it's **closed** (`for order := range p.shipping`), not
   count to an arbitrary 10. Ownership rule: each stage closes its output
   channel when its input is exhausted (receiver already does this
-  correctly — walk the `close` chain in the code).
-- Buffered channels would only *hide* this bug until order volume grew —
+  correctly, walk the `close` chain in the code).
+- Buffered channels would only *hide* this bug until order volume grew,
   buffers change *when* senders block, never *whether* a missing receiver
   deadlocks you.
 - Real pipelines also want cancellation (a `context.Context` or done
@@ -280,7 +280,7 @@ Chain of causality, backwards from the missing goroutine:
 ## Step 6: Extra Firepower (~8 min, trim as needed)
 
 Restart the session (`restart` works in `dlv exec`; or just quit and rerun)
-and show the *proactive* toolkit — everything so far was post-mortem.
+and show the *proactive* toolkit, everything so far was post-mortem.
 
 ### Conditional breakpoints + attached commands
 
@@ -296,10 +296,10 @@ and show the *proactive* toolkit — everything so far was post-mortem.
 	order.ID: 12
 ```
 
-Stops exactly on the 10th shipment (order 12 — orders 4 and 11 were
+Stops exactly on the 10th shipment (order 12, orders 4 and 11 were
 rejected by validation) and auto-prints whatever you attached with `on`.
 
-### Watchpoints — break on *data* instead of *code*
+### Watchpoints, break on *data* instead of *code*
 
 From that stopped frame:
 
@@ -314,7 +314,7 @@ Hardware watchpoint: the CPU stops the program on any write to that
 address, no matter which goroutine does it. Works on locals, globals,
 fields, slice elements. This is the star of exercise 3.
 
-### Tracepoints — printf debugging without the printf
+### Tracepoints, printf debugging without the printf
 
 ```
 (dlv) trace shiptrace main.(*Pipeline).shipper
@@ -323,10 +323,10 @@ fields, slice elements. This is the star of exercise 3.
 ```
 
 Non-stopping breakpoints: a notification per hit, execution continues.
-`display -a <expr>` is the complement — auto-print an expression at every
+`display -a <expr>` is the complement, auto-print an expression at every
 stop.
 
-### `dlv trace` — instrumentation-free function logging
+### `dlv trace`, instrumentation-free function logging
 
 From the shell, no session at all (the argument is a **regexp**):
 
@@ -340,7 +340,7 @@ dlv trace --timestamp 'SendOrder'
 ```
 
 Every call, with arguments and return, timestamped, zero code changes.
-Watch the trace flow... and then stop, mid-batch — the hang is visible in
+Watch the trace flow... and then stop, mid-batch, the hang is visible in
 the trace itself. (`--follow-calls <depth>` traces callees too.)
 
 ### Post-mortem: freeze-dry the deadlock
@@ -351,7 +351,7 @@ From any stopped Delve session:
 (dlv) dump ./pipeline.core
 ```
 
-Later — different terminal, different day, teammate's machine of the same
+Later, different terminal, different day, teammate's machine of the same
 platform:
 
 ```bash
@@ -361,37 +361,37 @@ dlv core ./pipeline ./pipeline.core
 
 `dlv core` also reads Linux ELF cores (`GOTRACEBACK=crash` + `ulimit -c
 unlimited` on a crashed service) and Windows minidumps. On macOS, Delve's
-own `dump` is the supported path. Note the dump is a full memory image —
+own `dump` is the supported path. Note the dump is a full memory image,
 gigabytes for a big process.
 
 ## Anticipated Questions
 
-**"My goroutine numbers don't match yours."** Correct — goroutine IDs are
+**"My goroutine numbers don't match yours."** Correct, goroutine IDs are
 assigned by the runtime and vary per run. Filter and group by *location*
 or *label*, never by ID.
 
-**"Why didn't the race detector catch this?"** There's no data race — every
+**"Why didn't the race detector catch this?"** There's no data race, every
 access here is a perfectly synchronized channel operation. Deadlocks,
 leaks, and logic bugs are invisible to `-race`. Different tool, different
 bug class.
 
 **"Couldn't I see this in the execution tracer?"** You'd see goroutines
-blocking and throughput dying, and blocked goroutines' stacks — but the
+blocking and throughput dying, and blocked goroutines' stacks, but the
 tracer shows you *events over time*, not queryable state: you can't ask
 "who is parked on *this* channel?" or print a channel's `sendq`. Tracer =
 what happened; debugger = what is true right now.
 
 **"Does stopping at a breakpoint stop all goroutines?"** Yes. And `next`/
-`step` stay pinned to the goroutine you're stepping — if another goroutine
+`step` stay pinned to the goroutine you're stepping, if another goroutine
 hits a breakpoint meanwhile, Delve tells you and switches. No more "my
 print statements interleave" chaos.
 
-**"Can I use this on a running production process?"** `dlv attach <pid>`
-— see the section README. Attaching pauses the process only while you're
+**"Can I use this on a running production process?"** `dlv attach <pid>`,
+see the section README. Attaching pauses the process only while you're
 stopped at a prompt; `quit` offers to leave it running (answer `n` to the
 kill prompt, or detach). Be deliberate about stopping the world in prod.
 
-**"What about goroutines that already exited, like the shipper?"** Gone —
+**"What about goroutines that already exited, like the shipper?"** Gone,
 a debugger sees present state, not history. If you need history, that's
 the execution tracer's job (part II), or a tracepoint set *before* the
 exit. Good closing line for the section: the tools compose.

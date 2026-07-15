@@ -6,7 +6,7 @@
 
 A fan-out/fan-in log-ingest pipeline: 200 events fanned out to 8 workers,
 results fanned back in to a collector. It's a small program and it looks
-reasonable — every shared structure is mutex-protected, `go vet` is clean,
+reasonable, every shared structure is mutex-protected, `go vet` is clean,
 and **`go run -race .` reports nothing**.
 
 Run it:
@@ -22,7 +22,7 @@ go run .
 ...forever...
 ```
 
-No crash. No `fatal error: all goroutines are asleep` — the monitor
+No crash. No `fatal error: all goroutines are asleep`, the monitor
 goroutine keeps a timer alive, so the runtime's deadlock detector never
 fires. This is what production hangs actually look like: the process is
 "up", the health check pings, and nothing moves.
@@ -41,7 +41,7 @@ SUCCESS
 
 ## Getting a Debugger onto a Hung Process
 
-Two equally good moves — practice both:
+Two equally good moves, practice both:
 
 ```bash
 # A: run it under Delve, let it stall, then interrupt
@@ -49,7 +49,7 @@ dlv debug
 (dlv) continue
 # ...wait for the MONITOR lines to repeat, then press Ctrl+C
 
-# B: production style — it's already running, attach to it
+# B: production style, it's already running, attach to it
 go build -gcflags='all=-N -l' -o ingest .
 ./ingest &
 dlv attach $(pgrep ingest)
@@ -75,7 +75,7 @@ your 8 workers? What wait reason do they show?
 
 All 8 workers show `[sync.Mutex.Lock]`. A mutex that never comes back is
 held by *someone*. A Go `sync.Mutex` doesn't record its owner, so find the
-holder the honest way: look at the stacks of the waiters — 7 of them will
+holder the honest way: look at the stacks of the waiters, 7 of them will
 look identical, and one will be different. Print all of them in one shot:
 
 ```
@@ -102,7 +102,7 @@ Seven workers are parked at the `s.mu.Lock()` at the top of
 same mutex. `sync.Mutex` is not reentrant: that goroutine is waiting for
 itself. Everyone else is waiting for it. Why did nothing happen until the
 first FATAL event (event 36)? Because `noteCritical` is only reached for
-critical events — the code path was never exercised until then.
+critical events, the code path was never exercised until then.
 
 </details>
 
@@ -155,7 +155,7 @@ the other 7 workers then piled up behind it.
 ### The fix
 
 Don't lock in `noteCritical`; document that it requires the caller to
-hold the lock (this is the standard Go pattern — often spelled with a
+hold the lock (this is the standard Go pattern, often spelled with a
 `...Locked` suffix):
 
 ```go
@@ -169,7 +169,7 @@ func (s *Stats) noteCritical(eventID int) {
 Alternatives worth discussing: restructure `Record` to do all its work
 under one lock scope, or make the critical-ID list its own structure with
 its own lock. **Non-fix:** `sync.RWMutex` doesn't help (also not
-reentrant), and Go deliberately has no reentrant mutex — if you're
+reentrant), and Go deliberately has no reentrant mutex, if you're
 re-locking, your invariants are already unclear (see Russ Cox's classic
 "experience report" on recursive mutexes).
 
@@ -179,26 +179,26 @@ re-locking, your invariants are already unclear (see Russ Cox's classic
 - Runtime deadlock detector: only fires when *every* goroutine is asleep;
   the monitor's `time.Sleep` keeps the process technically alive.
 - Reading the code: `Record` and `noteCritical` are both individually
-  idiomatic — the bug only exists in the call chain, which is exactly
+  idiomatic, the bug only exists in the call chain, which is exactly
   what a stack trace shows and a diff review doesn't.
 
 </details>
 
 ## Stretch: Go 1.26's Goroutine Leak Profile
 
-Go 1.26 ships an **experimental** goroutine *leak* profile — a pprof
+Go 1.26 ships an **experimental** goroutine *leak* profile, a pprof
 profile that reports only goroutines the runtime has proven can never
 wake up. Detection rides on the garbage collector: if a goroutine is
 blocked on a channel/mutex/etc. that is unreachable from any runnable
 goroutine (or anything a runnable goroutine could unblock), it's leaked.
 A goroutine in `time.Sleep` (our monitor) or `IO wait` will wake up, so
-it never appears — which is exactly the noise the plain `goroutine`
+it never appears, which is exactly the noise the plain `goroutine`
 profile makes you filter by hand.
 
 It's gated behind a **build-time** experiment; the profile is named
 `goroutineleak` (`runtime/pprof.Lookup("goroutineleak")`, or
 `/debug/pprof/goroutineleak` once you import `net/http/pprof`). This
-program has a production-style opt-in debug endpoint for exactly this —
+program has a production-style opt-in debug endpoint for exactly this,
 set `INGEST_DEBUG_ADDR`:
 
 ```bash
@@ -231,7 +231,7 @@ goroutineleak profile: total 11
 1 @ ...	sync.(*WaitGroup).Wait+0xa7 ... main.main.func2+0x23  ./main.go:160
 ```
 
-Eleven leaked goroutines, zero false positives — the monitor and the
+Eleven leaked goroutines, zero false positives, the monitor and the
 HTTP goroutines are correctly absent. And look closely: the odd one out
 from Hint 3 is *right there*, a one-goroutine bucket whose stack has
 `Record` **and** `noteCritical` in flight. (`?debug=2` prints full
@@ -239,7 +239,7 @@ stacks instead, with wait reasons annotated:
 `goroutine 6 [sync.Mutex.Lock (leaked)]`.)
 
 **That + where, but not why.** The profile is proof you *have* a leak
-and shows where every leaked goroutine is parked — perfect for a CI
+and shows where every leaked goroutine is parked, perfect for a CI
 check or a fleet-wide sweep, and it works on processes you'd never
 attach a debugger to. What it can't do is tell you *why*: no variable
 values, no "which channel is this and who else is on it", no

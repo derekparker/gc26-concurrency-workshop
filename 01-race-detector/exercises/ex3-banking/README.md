@@ -37,7 +37,7 @@ AUDIT PASSED: the books balance
 ...
 ```
 
-Money vanishes — or appears — roughly one run in five or ten. In production
+Money vanishes, or appears, roughly one run in five or ten. In production
 this is the bug report that says *"the ledger drifts by a few cents a day,"*
 and staring at the code doesn't help, because every method visibly takes a
 lock.
@@ -58,14 +58,14 @@ lock.
 3. Fix the system:
    - `go run -race .` → no warnings.
    - The audit must pass on every run (loop it 20×).
-   - Keep `Transfer` safe from deadlock — think about what happens if you
+   - Keep `Transfer` safe from deadlock, think about what happens if you
      move to finer-grained locking later.
 
 ## Questions to Discuss
 
 - Why didn't `go vet` catch this? What *can* static analysis know here?
 - Why does the corruption cluster around large transfer amounts? (Read
-  `Transfer` carefully — when is the window between *deciding* and
+  `Transfer` carefully, when is the window between *deciding* and
   *committing* widest?)
 - After your fix: is `Transfer` now *atomic* from an observer's point of
   view, or merely race-free? What could `GetBalance` observe mid-transfer
@@ -75,10 +75,10 @@ lock.
 <summary><strong>Hint 1</strong> (the mutex is real, the protection isn't)</summary>
 
 Look at *which kind* of lock each method takes. `Transfer` takes
-`RLock` — the comment even justifies it: the map isn't being modified, so a
+`RLock`, the comment even justifies it: the map isn't being modified, so a
 read lock "is sufficient." The map access is indeed safe... but then it
 **writes** `from.balance` and `to.balance`. An `RWMutex` allows any number
-of `RLock` holders at once — so N tellers mutate balances *simultaneously*,
+of `RLock` holders at once, so N tellers mutate balances *simultaneously*,
 all "holding the lock." A read lock makes concurrent writers safe from
 `CreateAccount`, not from each other.
 
@@ -91,14 +91,14 @@ both under `RLock`.
 <details>
 <summary><strong>Hint 2</strong> (the second race)</summary>
 
-`LargestAccount` returns an `*Account` — a pointer into `Bank`'s protected
+`LargestAccount` returns an `*Account`, a pointer into `Bank`'s protected
 state. The lock is released when it returns, but `vipReporter` then reads
 `vip.balance` with no lock at all, racing with the tellers. Returning
 pointers (or maps/slices) to lock-protected data leaks it out of the
 critical section. Return a *copy* instead.
 
 Also notice `fraudCheck`: the balances are read at lines 74–75, but written
-at 83–84 — with a slow compliance check between them for amounts > 95.
+at 83–84, with a slow compliance check between them for amounts > 95.
 That's why big transfers corrupt more often: the read-decide-commit window
 is widest there. A race on a rarely-slow path = a bug that only shows under
 "weird" traffic.
@@ -108,7 +108,7 @@ is widest there. A race on a rarely-slow path = a bug that only shows under
 <details>
 <summary><strong>Solution</strong></summary>
 
-Minimal correct fix — `Transfer` mutates, so it takes the **write** lock,
+Minimal correct fix, `Transfer` mutates, so it takes the **write** lock,
 and `LargestAccount` returns a copy:
 
 ```go
@@ -137,7 +137,7 @@ func (b *Bank) LargestAccount() Account { // value, not *Account
 (`vipReporter` then uses the returned value; check for a zero `Account`
 instead of `nil`.)
 
-`GetBalance` / `TotalBalance` may keep `RLock` — once all writes happen
+`GetBalance` / `TotalBalance` may keep `RLock`, once all writes happen
 under the exclusive lock, read-locked reads are properly ordered.
 
 **Why this beats "clever" fixes:**
@@ -145,21 +145,21 @@ under the exclusive lock, read-locked reads are properly ordered.
 - *Atomic balances* (`atomic.Int64`) would silence the detector but break
   the *invariant*: the insufficient-funds check and the two balance updates
   must be one atomic decision, or two goroutines can both pass the check and
-  overdraw. Race-free ≠ correct — this is a check-then-act (logical) race
+  overdraw. Race-free ≠ correct, this is a check-then-act (logical) race
   the detector cannot see.
 - *Per-account mutexes* scale better but introduce lock-ordering: locking
   `from` then `to` while another teller locks `to` then `from` deadlocks.
   The standard trick is to always lock the lower account ID first. Great
-  extension if you finish early — section 03 shows how to debug the deadlock
+  extension if you finish early, section 03 shows how to debug the deadlock
   you'll write on the first attempt.
 
 **Takeaways:**
 
 1. `RLock` means "I promise I only read." The compiler doesn't check that
-   promise — the race detector does.
+   promise, the race detector does.
 2. Never let pointers to protected data escape the critical section.
 3. The window between reading state and writing a decision is where races
-   live; the wider (slower) the window, the more corruption — but the race
+   live; the wider (slower) the window, the more corruption, but the race
    exists at any width, and `-race` finds it at any width.
 
 </details>

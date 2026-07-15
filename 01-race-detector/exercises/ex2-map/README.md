@@ -4,9 +4,9 @@
 
 A service keeps two maps with very different access patterns:
 
-1. **Cache** (`map[string]*CachedResult`) — expensive results, computed once,
+1. **Cache** (`map[string]*CachedResult`), expensive results, computed once,
    read many times, rarely invalidated.
-2. **Metrics** (`map[string]int`) — counters incremented constantly, read
+2. **Metrics** (`map[string]int`), counters incremented constantly, read
    occasionally for reporting.
 
 The team's bug tracker has a ticket titled *"CI job crashes sometimes,
@@ -39,15 +39,15 @@ main.cacheWorker(0x2, ...)
 ```
 
 (You may also see `concurrent map read and map write` or `concurrent map
-iteration and map write` — same disease, different symptom.)
+iteration and map write`, same disease, different symptom.)
 
 ## Notice What the Crash Doesn't Tell You
 
-The fatal error gives you **one** goroutine — the one that lost the coin
+The fatal error gives you **one** goroutine, the one that lost the coin
 toss. Who was the *other* writer? Which map operation? No idea. It's also
 best-effort: the runtime's map check only fires when two accesses physically
 collide, which is why CI is flaky instead of red. It is not the race
-detector — it's a cheap tripwire that happens to catch some races on maps
+detector, it's a cheap tripwire that happens to catch some races on maps
 only.
 
 ## Your Task
@@ -58,7 +58,7 @@ only.
    go run -race .
    ```
 
-   Now you get *pairs* of stacks, every single run. Inventory the races —
+   Now you get *pairs* of stacks, every single run. Inventory the races,
    you should find them on **both maps**, and on something that is *not* a
    map (look for a report pointing inside `GetFromCache`).
 
@@ -72,7 +72,7 @@ only.
 
 - Why does the plain run only crash *sometimes*, while `-race` complains
   *every* time? (What does the detector track that the map tripwire doesn't?)
-- `GetAllMetrics` copies the map before returning it. Copying is a *read* —
+- `GetAllMetrics` copies the map before returning it. Copying is a *read*,
   why is it still racy?
 - The race on `CachedResult.HitCount` survives even if you lock every map
   operation perfectly. Why?
@@ -83,7 +83,7 @@ only.
 Four distinct problems:
 
 1. `cache` map: written in `StoreInCache`/`InvalidateCacheEntry`, read in
-   `GetFromCache`, iterated in `GetCacheStats` — all unsynchronized.
+   `GetFromCache`, iterated in `GetCacheStats`, all unsynchronized.
 2. `metrics` map: `RecordMetric` does `m[k]++` from six goroutines;
    `GetMetric`/`GetAllMetrics` read concurrently.
 3. `CachedResult.HitCount++` in `GetFromCache` mutates the *struct behind
@@ -96,7 +96,7 @@ Four distinct problems:
 <details>
 <summary><strong>Solution sketch</strong></summary>
 
-**Metrics map — plain `sync.Mutex`.** The workload is ~90% writes;
+**Metrics map, plain `sync.Mutex`.** The workload is ~90% writes;
 `RWMutex` buys nothing when everyone needs the write lock, and `sync.Map` is
 explicitly *not* designed for write-heavy counters:
 
@@ -116,7 +116,7 @@ func (s *Service) RecordMetric(metric string) {
 }
 ```
 
-**Cache map — `sync.RWMutex`.** Read-mostly with stable keys: many
+**Cache map, `sync.RWMutex`.** Read-mostly with stable keys: many
 concurrent `RLock` readers, exclusive `Lock` for store/invalidate.
 
 **The trap:** `HitCount++` is a *write* that happens on the cache's *read*
@@ -127,14 +127,14 @@ path. If `GetFromCache` takes only `RLock`, `-race` still fires on
 - take the full `Lock` in `GetFromCache` (kills read concurrency), or
 - drop per-entry hit counts and count hits in metrics instead.
 
-The atomic field is the idiomatic fix — a nice example of mixing a lock
+The atomic field is the idiomatic fix, a nice example of mixing a lock
 (for the map) with an atomic (for one hot field).
 
-**`sync.Map`?** Reasonable for the cache (stable keys, read-mostly — exactly
+**`sync.Map`?** Reasonable for the cache (stable keys, read-mostly, exactly
 its documented use case), and it would remove the `RWMutex`. But it's
 `any`-typed, doesn't fix `HitCount`, and is wrong for the write-heavy
 metrics map. Good discussion, not required.
 
-Two use cases, two different answers — that's the point of this exercise.
+Two use cases, two different answers, that's the point of this exercise.
 
 </details>

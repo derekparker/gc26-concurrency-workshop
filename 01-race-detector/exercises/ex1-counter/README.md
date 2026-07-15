@@ -43,7 +43,7 @@ Run it ten times. It prints 5000 every time. So it's correct... right?
 ## Reading Your First Report
 
 You should see several warnings (typically 7–8). They collapse to just
-**three racy fields** — remember: fix the shared state, not each warning.
+**three racy fields**, remember: fix the shared state, not each warning.
 For example:
 
 ```
@@ -80,7 +80,7 @@ and `RegisterWorker`. Readers: the same workers *plus* `monitorProgress` via
 <summary><strong>Hint 2</strong> (why does it look correct?)</summary>
 
 Workers publish only once per 20 ms batch, so two read-modify-write
-sequences almost never physically overlap — the *loss* is rare, but the
+sequences almost never physically overlap, the *loss* is rare, but the
 *race* (no happens-before between accesses) is constant, and `-race` flags
 the race, not the loss. In production, more workers + more load = the 4990s
 start appearing. This is the whole sales pitch for the tool.
@@ -117,7 +117,7 @@ func (s *Stats) GetTotal() int {
 
 ...and the same for `RegisterWorker`, `GetWorkerCount`, `GetLastUpdated`,
 and `GetTimeSinceUpdate` (`startTime` is written once before the goroutines
-start, then only read — publishing it via `NewStats` before any `go`
+start, then only read, publishing it via `NewStats` before any `go`
 statement is a happens-before edge, so `GetElapsedTime` needs no lock; guard
 it anyway if that subtlety makes you nervous).
 
@@ -129,7 +129,7 @@ lock itself, or split out an unexported unlocked helper.
 Alternatives worth discussing:
 
 - `processed` and `workers` could be `atomic.Int64`, but `lastUpdated` is a
-  multi-word `time.Time` — atomics can't help; you'd need the mutex anyway.
+  multi-word `time.Time`, atomics can't help; you'd need the mutex anyway.
   Once you have a mutex, simplest is to use it for everything.
 - `sync.RWMutex` fits the "one writer group, frequent readers" shape, but at
   this scale a plain `Mutex` measures the same. Don't reach for `RWMutex`

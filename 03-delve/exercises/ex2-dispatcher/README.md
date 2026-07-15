@@ -17,7 +17,7 @@ go run .
 fatal error: all goroutines are asleep - deadlock!
 ```
 
-Same crash, every run — this deadlock is fully deterministic.
+Same crash, every run, this deadlock is fully deterministic.
 
 ## Your Task
 
@@ -119,7 +119,7 @@ Goroutines waiting on this channel:
 * Goroutine 1 - User: ./main.go:79 main.main [chan send]
 ```
 
-The buffer isn't opaque — those are real values you can read:
+The buffer isn't opaque, those are real values you can read:
 
 ```
 (dlv) print jobs.buf
@@ -131,9 +131,9 @@ The buffer isn't opaque — those are real values you can read:
 ]
 ```
 
-(Ring-buffer order — `sendx`/`recvx` are the wrap indices.) Jobs 6–9 are
+(Ring-buffer order, `sendx`/`recvx` are the wrap indices.) Jobs 6–9 are
 stuck in the buffer. In a real system this is how you learn *which* work
-items are trapped in a wedged queue — which tenant, which request IDs.
+items are trapped in a wedged queue, which tenant, which request IDs.
 
 ```
 (dlv) print reports
@@ -152,7 +152,7 @@ Goroutines waiting on this channel:
 The picture, entirely from channel state:
 
 - workers finished 2 jobs (buffered in `reports`) and hold 3 more,
-  blocked sending their reports — because **`reports.recvq` is empty**
+  blocked sending their reports, because **`reports.recvq` is empty**
 - nobody drains `reports` because main only starts reading reports in
   "phase 2", *after* dispatching all 12 jobs
 - main can't finish dispatching because workers stopped taking jobs, so
@@ -167,7 +167,7 @@ are a time bomb.
 
 ### The fix
 
-Dispatch and collect concurrently — either move dispatch into a goroutine:
+Dispatch and collect concurrently, either move dispatch into a goroutine:
 
 ```go
 go func() {
@@ -184,7 +184,7 @@ for range batch {
 ```
 
 ...or keep dispatch in main and collect in a goroutine. Either breaks the
-cycle. Growing the buffers to 12 also "fixes" this batch — ask yourself
+cycle. Growing the buffers to 12 also "fixes" this batch, ask yourself
 what happens with batch 13. (Buffers change *when* senders block, never
 *whether* a missing receiver deadlocks you.)
 
@@ -195,7 +195,7 @@ what happens with batch 13. (Buffers change *when* senders block, never
 - The runtime's dump also showed 4 goroutines in `chan send`. What did
   `print reports` tell you that the dump could not? (The dump has no
   buffer contents, no qcount, no "which channel is this", no recvq/sendq
-  membership — you'd correlate four stacks by hand.)
+  membership, you'd correlate four stacks by hand.)
 - `qcount == dataqsiz` with a populated `sendq` is a signature. So is
   `qcount == 0` with a populated `recvq`. What failure mode does each
   smell like, respectively? (Consumer too slow/dead vs producer too

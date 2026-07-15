@@ -30,7 +30,7 @@ FAILED: inventory drift of +30 units
 Stock in this system can only go **down** (orders take units off the
 shelf; the janitor merely *returns* units a reservation already took).
 Yet we ended up 30 units rich. Someone is writing bad values into
-`store.stock` — while holding the lock, so `-race` is silent, and every
+`store.stock`, while holding the lock, so `-race` is silent, and every
 function involved looks reasonable in review.
 
 ## Your Task
@@ -47,8 +47,8 @@ SUCCESS: books balance
 
 You want a slot in `store.stock` that (a) ends up wrong and (b) has few
 legitimate writes, so you aren't stopping every 5ms. Check the order book
-in `buildOrders`: the sticker (item 5) is a slow mover — five orders in
-the whole batch — yet it finishes at 99. Count its moves: 100 - 3 takes
+in `buildOrders`: the sticker (item 5) is a slow mover, five orders in
+the whole batch, yet it finishes at 99. Count its moves: 100 - 3 takes
 - 2 reserves + 2 returns = 97. It shows 99. **Watch item 5.**
 
 ## Hints
@@ -81,11 +81,11 @@ function, or which pointer alias performs it. You get 4 of them
 Every stop tells you who wrote, from where. Expect this sequence:
 
 1. one hit in `main.main` (the initial `stock[i] = 100` fill loop)
-2. a handful of hits in `Take` / `Reserve` — the legitimate order flow,
+2. a handful of hits in `Take` / `Reserve`, the legitimate order flow,
    value stepping down 100 → 99 → 98 → 97 → 96 → 95
 3. then a hit where the value **goes up**. That one. `stack` it.
 
-Keep `print store.stock[5]` on your fingers between continues — or
+Keep `print store.stock[5]` on your fingers between continues, or
 `display -a store.stock[5]` to print it automatically at every stop.
 
 </details>
@@ -94,11 +94,11 @@ Keep `print store.stock[5]` on your fingers between continues — or
 <summary>Hint 3: why the janitor's write is wrong</summary>
 
 You caught `releaseExpired` writing 99 over 95. It computed that 99 from
-`stock[item] + reserved[item]` — but look at *which* `stock` that is: the
+`stock[item] + reserved[item]`, but look at *which* `stock` that is: the
 snapshot it took before its 300ms "ledger scan", not the live table. Any
 sale that happened during those 300ms is erased by the write-back. It's a
 stale read-modify-write: invisible to the race detector because both the
-read and the write held the lock — they just didn't hold it *for the
+read and the write held the lock, they just didn't hold it *for the
 duration of the reasoning*.
 
 </details>
@@ -147,7 +147,7 @@ w.stock[item] = stock[item] + reserved[item]   // main.go:92
 
 `stock` here is the **snapshot** captured before the 300ms expiry scan.
 The janitor remembered `stock[5]` as 97 (with 2 reserved), slept through
-two more sales (97 → 95), then wrote back 97 + 2 = 99 — erasing both
+two more sales (97 → 95), then wrote back 97 + 2 = 99, erasing both
 sales. Same story, at higher volume, on items 4 and 0–3: +30 units of
 phantom inventory.
 
@@ -174,7 +174,7 @@ for item := range numItems {
 _, reserved := w.snapshot()
 ```
 
-(Note `reserved[item]` — the snapshot count of what to release — is still
+(Note `reserved[item]`, the snapshot count of what to release, is still
 fine to use: reservations only grow between snapshot and write-back, and
 releasing only the snapshotted ones is correct. The bug was overwriting
 `stock` with a stale *absolute* value.)
@@ -182,7 +182,7 @@ releasing only the snapshotted ones is correct. The bug was overwriting
 Deeper lesson: **snapshot + slow work + write-back of absolutes** is a
 stale-RMW even when every individual access is locked. Locks make
 accesses atomic; they don't make *reasoning across time* atomic. The
-race detector checks happens-before on accesses, so it cannot see this —
+race detector checks happens-before on accesses, so it cannot see this,
 but the CPU saw the write, and the watchpoint made it testify.
 
 ### Verify
@@ -203,7 +203,7 @@ SUCCESS: books balance
   a rarely-written aggregate instead, or `-r` on a sentinel value...)
 - The drift (+30) is timing-dependent, but the *bug* triggers every run.
   What structural property guarantees that? (The janitor's scan takes
-  300ms while pickers need ~400ms for the batch — overlap is built in.)
+  300ms while pickers need ~400ms for the batch, overlap is built in.)
 - Could you have found this with the execution tracer? With logging?
   What's the minimal evidence that convicts the janitor, and which tool
   produces it fastest?

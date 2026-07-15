@@ -6,19 +6,19 @@ The race detector told you *that* memory was racy. The execution tracer
 told you *what happened over time*. Delve answers the question the other
 two can't: **what is true about this program right now?** Which goroutines
 exist, what each one is blocked on, what's inside that channel, who holds
-that lock, who wrote that value — queryable, live, on a frozen process.
+that lock, who wrote that value, queryable, live, on a frozen process.
 
 This part covers the Delve workflows that matter for concurrency bugs:
 goroutine triage at scale, channel forensics, watchpoints, and debugging
-processes you can't restart — live (attach) or dead (core dumps).
+processes you can't restart, live (attach) or dead (core dumps).
 
 **A 2026 note worth saying out loud:** as AI tools write a growing share of
 our code, engineers spend a growing share of their time debugging code they
 didn't write. A debugger is the fastest way to build ground truth about
-unfamiliar code — you don't have to *understand* 400 goroutines to ask
+unfamiliar code, you don't have to *understand* 400 goroutines to ask
 Delve which six places they're stuck in. And it cuts both ways: agents can
-drive Delve too (headless RPC / DAP), and a debugger transcript — "these
-goroutines, parked on this channel, holding these values" — is exactly the
+drive Delve too (headless RPC / DAP), and a debugger transcript, "these
+goroutines, parked on this channel, holding these values", is exactly the
 kind of high-signal evidence that keeps an AI assistant fixing the real
 bug instead of guessing. The engineer who can produce that evidence stays
 the one steering.
@@ -36,8 +36,8 @@ the one steering.
 
 The "Beyond the terminal" section at the bottom (attach, cores, scripting,
 editors, agents) is designed to be woven into the demo and wrap-up rather
-than presented as its own block. The finale is the workshop's closing act
-— it cashes in the AI framing above with a live agent at the debugger —
+than presented as its own block. The finale is the workshop's closing act,
+it cashes in the AI framing above with a live agent at the debugger,
 but the 90-minute core stands alone if the clock says no.
 
 ## Setup
@@ -64,7 +64,7 @@ For binaries you build yourself, keep variables inspectable:
 go build -gcflags='all=-N -l' -o program .
 ```
 
-(`-N` no optimizations, `-l` no inlining — what `dlv debug` does for you.)
+(`-N` no optimizations, `-l` no inlining, what `dlv debug` does for you.)
 
 ## Delve Crash Course (10 minutes, live at the prompt)
 
@@ -82,46 +82,46 @@ print <ch>                       # channel internals: buffer, sendq, recvq
 
 Worth demonstrating once each:
 
-- **Wait reasons** — `goroutines` output ends in `[chan send]`,
+- **Wait reasons**, `goroutines` output ends in `[chan send]`,
   `[sync.Mutex.Lock]`, `[select]`, `[sleep]`, `[IO wait]`... Triage by
   wait reason before reading a single line of code.
-- **Filtering/grouping** — `-with user`, `-with/-without (userloc|curloc|goloc|startloc) <substr>`,
+- **Filtering/grouping**, `-with user`, `-with/-without (userloc|curloc|goloc|startloc) <substr>`,
   `-group (userloc|label <key>)`, `-with label key=value`, `-exec <cmd>`
   to run a command on every match. If your services set pprof labels
   (`pprof.Do`), Delve turns them into a query language for goroutines.
-- **Context switching** — `goroutine 7` makes goroutine 7 current
+- **Context switching**, `goroutine 7` makes goroutine 7 current
   (`bt`, `frame 3`, `locals`, `print` all follow); `goroutine 7 stack`
   peeks without switching.
-- **Panics and fatal errors are breakpoints** — Delve pre-installs
+- **Panics and fatal errors are breakpoints**, Delve pre-installs
   `unrecovered-panic` and `runtime-fatal-throw`, so `fatal error: all
   goroutines are asleep - deadlock!` leaves you at a prompt with the
   corpse still warm. For hangs the runtime *doesn't* detect: `Ctrl+C`
   freezes the process at a prompt.
-- **Stepping is goroutine-pinned** — breakpoints stop the world; `next`
+- **Stepping is goroutine-pinned**, breakpoints stop the world; `next`
   and `step` stay on your goroutine rather than bouncing to whichever
   goroutine runs next.
-- **Breakpoints that do things** — `condition <bp> <expr>`,
+- **Breakpoints that do things**, `condition <bp> <expr>`,
   `on <bp> <command>`, `trace <locspec>` (notify, don't stop),
   `display -a <expr>`, `watch -w <expr>` (hardware watchpoint on a memory
-  location — break on *data*, not code).
+  location, break on *data*, not code).
 
 ## What Each Piece Teaches
 
-- **`demo/`** — a pipeline deadlock, instructor-led: goroutine triage,
+- **`demo/`**, a pipeline deadlock, instructor-led: goroutine triage,
   the `-chan` filter, channel internals, root-causing a missing receiver,
   plus conditional breakpoints, tracepoints, `dlv trace`, and `dump`.
-- **`ex1-fanout-fanin/`** — a fan-out/fan-in pipeline that stalls
+- **`ex1-fanout-fanin/`**, a fan-out/fan-in pipeline that stalls
   *silently* (the runtime deadlock detector never fires). Attach or
   interrupt, group by location, find the one goroutine that's different.
   Its stretch goal demonstrates Go 1.26's experimental **goroutine leak
   profile** against the same stall (see below).
-- **`ex2-dispatcher/`** — a dispatch/collect deadlock. Solved almost
+- **`ex2-dispatcher/`**, a dispatch/collect deadlock. Solved almost
   entirely by reading `print <chan>` output: full buffer, empty `recvq`,
   loaded `sendq`.
-- **`ex3-inventory/`** — a mutex-protected, race-detector-clean,
+- **`ex3-inventory/`**, a mutex-protected, race-detector-clean,
   wrong-*value* bug. A watchpoint catches the culprit goroutine mid-write.
   The hardest and the most "only a debugger finds this" of the three.
-- **`ex4-agent/`** (bonus finale) — no new program; students wire
+- **`ex4-agent/`** (bonus finale), no new program; students wire
   [`go-delve/mcp-dap-server`](https://github.com/go-delve/mcp-dap-server)
   into a coding agent and watch it debug ex2's deadlock live: launch,
   goroutine sweep, frame-targeted evaluation, written verdict.
@@ -136,7 +136,7 @@ dlv attach $(pgrep myservice)
 ```
 
 The process is only paused while you sit at the prompt; `quit` asks
-whether to kill it — answer `n` to detach and let it keep running. This is
+whether to kill it, answer `n` to detach and let it keep running. This is
 the move when a service is wedged *right now* and a restart would destroy
 the evidence. (On Linux boxes you may need
 `sysctl kernel.yama.ptrace_scope=0` or root; on macOS, Delve's installed
@@ -177,17 +177,17 @@ dlv trace --timestamp 'SendOrder|Checkout'
 ```
 
 Delve also embeds Starlark (`source script.star`) for programmatic
-sessions — e.g. iterate all goroutines and dump selected frame variables.
+sessions, e.g. iterate all goroutines and dump selected frame variables.
 
 ### Editors and DAP
 
 `dlv dap` speaks the Debug Adapter Protocol; VS Code's Go extension,
 GoLand, and Neovim (nvim-dap) all sit on top of it. Same engine, so
-everything from this section exists there too — VS Code's CALL STACK view
+everything from this section exists there too, VS Code's CALL STACK view
 is `goroutines`, conditional breakpoints are right-click away, and the
 DEBUG CONSOLE accepts `dlv` expressions. Recent Delve releases keep
 improving DAP (multi-process `follow-exec` targets, suspended
-breakpoints). Use the GUI day-to-day if you like — but the CLI is what you
+breakpoints). Use the GUI day-to-day if you like, but the CLI is what you
 have over SSH on the box where prod is burning, and it's what scripts and
 agents can drive.
 
@@ -200,7 +200,7 @@ profile (`runtime/pprof.Lookup("goroutineleak")` or
 `/debug/pprof/goroutineleak`). It's the fleet-scale complement to this
 section: the profile tells you **that** goroutines leaked and where
 they're parked; Delve tells you **why**. Exercise 1's stretch goal runs
-it against the silent stall, real output included —
+it against the silent stall, real output included,
 [see it there](exercises/ex1-fanout-fanin/README.md#stretch-go-126s-goroutine-leak-profile).
 
 ### AI agents can hold the debugger too
@@ -211,15 +211,15 @@ dlv connect 127.0.0.1:2345    # a human... or not
 ```
 
 Headless Delve exposes the full JSON-RPC API (and `dlv dap` the DAP one);
-the Delve project ships an MCP bridge —
-[`go-delve/mcp-dap-server`](https://github.com/go-delve/mcp-dap-server) —
+the Delve project ships an MCP bridge,
+[`go-delve/mcp-dap-server`](https://github.com/go-delve/mcp-dap-server),
 that lets coding agents set breakpoints and walk goroutine dumps through
 those same protocols. The bonus finale,
 [`exercises/ex4-agent/`](exercises/ex4-agent/), wires it into Claude Code
 and lets an agent debug exercise 2's deadlock in front of the room. An
 agent that can walk a frozen process reasons from evidence; an agent that
 can't is pattern-matching on your source. Either way, *someone* has to
-know what a `sendq` full of parked goroutines means — that's you.
+know what a `sendq` full of parked goroutines means, that's you.
 
 ## Verify Your Setup
 
@@ -231,6 +231,6 @@ cd 03-delve/demo && go build ./... && dlv version
 
 - [Delve CLI command reference](https://github.com/go-delve/delve/blob/master/Documentation/cli/README.md)
 - [Delve documentation tree](https://github.com/go-delve/delve/tree/master/Documentation)
-- [`goroutines` command deep dive](https://github.com/go-delve/delve/blob/master/Documentation/cli/README.md#goroutines) — filtering, grouping, `-chan`, `-exec`
-- [go-delve/mcp-dap-server](https://github.com/go-delve/mcp-dap-server) — the MCP ↔ DAP bridge used in the bonus finale
-- [Go 1.26 release notes: goroutine leak profile](https://go.dev/doc/go1.26) — the `goroutineleak` profile used in exercise 1's stretch goal
+- [`goroutines` command deep dive](https://github.com/go-delve/delve/blob/master/Documentation/cli/README.md#goroutines), filtering, grouping, `-chan`, `-exec`
+- [go-delve/mcp-dap-server](https://github.com/go-delve/mcp-dap-server), the MCP ↔ DAP bridge used in the bonus finale
+- [Go 1.26 release notes: goroutine leak profile](https://go.dev/doc/go1.26), the `goroutineleak` profile used in exercise 1's stretch goal

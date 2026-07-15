@@ -7,7 +7,7 @@ repository root** in this order:
 
 | Step | Command (from repo root) | Result |
 |------|--------------------------|--------|
-| 0 | — | `counter.go` as committed: the racy version |
+| 0 |, | `counter.go` as committed: the racy version |
 | 1 | `git apply 01-race-detector/demo/mutex.diff` | coarse mutex: correct but serialized |
 | 2 | `git apply 01-race-detector/demo/trace.diff` | adds `runtime/trace` (optional bridge to section 02) |
 | 3 | `git apply 01-race-detector/demo/fix-mutex.diff` | fine-grained mutex inside the loop |
@@ -16,10 +16,10 @@ repository root** in this order:
 Reset everything with `git checkout -- 01-race-detector/demo/counter.go`
 (and `rm -f counter.trace` if you generated one).
 
-## Step 0 — Show the bug (5 min)
+## Step 0, Show the bug (5 min)
 
 Walk through `counter.go`: two goroutines, each increments a shared field
-100,000 times. Point out `wg.Go` (added in Go 1.25) — no more
+100,000 times. Point out `wg.Go` (added in Go 1.25), no more
 `wg.Add(1)` / `defer wg.Done()` boilerplate to get wrong.
 
 ```bash
@@ -27,7 +27,7 @@ cd 01-race-detector/demo
 go run .
 ```
 
-Expected output — run it two or three times:
+Expected output, run it two or three times:
 
 ```
 Final counter: 102120
@@ -40,10 +40,10 @@ Talking points:
 - We asked for 200,000 and got roughly half. Where did ~95,000 increments go?
 - `inc.counter++` is three operations: load, add, store. Two goroutines
   interleave them and one goroutine's store overwrites the other's.
-- Ask the room: "is this a compiler bug? a scheduler bug?" — it's *our* bug:
+- Ask the room: "is this a compiler bug? a scheduler bug?", it's *our* bug:
   a data race, and the program's behavior is undefined.
 
-## Step 1 — Run the detector, read the report (7 min)
+## Step 1, Run the detector, read the report (7 min)
 
 ```bash
 go run -race .
@@ -77,21 +77,21 @@ Found 2 data race(s)
 exit status 66
 ```
 
-**Spend real time here — reading reports is the core skill.** Walk through:
+**Spend real time here, reading reports is the core skill.** Walk through:
 
 1. Two stacks = the two conflicting accesses; same address (`0x00c...`),
    same line (`counter.go:14`), one of them a write.
 2. "Previous write" = the earlier access the detector remembered.
-3. "Goroutine created at" = which `go` statement launched each party — here
+3. "Goroutine created at" = which `go` statement launched each party, here
    you can even tell the two `wg.Go` calls apart (`counter.go:22` vs `:23`).
    Frames in the runtime/stdlib (like `waitgroup.go`) are usually scaffolding;
    scan for *your* files.
-4. Note the program *still ran* and printed a result — the detector reports
+4. Note the program *still ran* and printed a result, the detector reports
    and continues, then exits 66. Mention `GORACE="halt_on_error=1"`.
-5. Mention cost: ~5–10× memory, 2–20× CPU — cheap in tests/CI, targeted use
+5. Mention cost: ~5–10× memory, 2–20× CPU, cheap in tests/CI, targeted use
    in production.
 
-## Step 2 — Fix #1: a mutex... in the wrong place (3 min)
+## Step 2, Fix #1: a mutex... in the wrong place (3 min)
 
 ```bash
 git apply 01-race-detector/demo/mutex.diff   # from repo root
@@ -107,12 +107,12 @@ Correct! No race! Ship it? **Point out the flaw:** the lock is around the
 100,000 increments. We fixed correctness by deleting the concurrency.
 
 Ask the room: "how would you *prove* the two goroutines no longer overlap?"
-You can't see scheduling in a race report — that's the execution tracer's
+You can't see scheduling in a race report, that's the execution tracer's
 job (section 02). Optionally apply `trace.diff` now; it writes
 `counter.trace`, which you'll open with `go tool trace` in the next section
 to *show* the serialization. If you're running short on time, skip it.
 
-## Step 3 — Fix #2: shrink the critical section (2 min)
+## Step 3, Fix #2: shrink the critical section (2 min)
 
 ```bash
 git apply 01-race-detector/demo/fix-mutex.diff
@@ -120,10 +120,10 @@ go run -race .    # still 200000, no race
 ```
 
 Lock/unlock now wraps only the increment: goroutines genuinely interleave.
-Talking point: lock granularity is a trade-off — finer = more parallelism,
+Talking point: lock granularity is a trade-off, finer = more parallelism,
 more lock traffic; coarser = simpler, less parallel.
 
-## Step 4 — Fix #3: the right tool for a counter (3 min)
+## Step 4, Fix #3: the right tool for a counter (3 min)
 
 ```bash
 git apply 01-race-detector/demo/atomic.diff
@@ -139,22 +139,22 @@ state must change together.**
 ## Wrap-up line
 
 "The detector gave us the exact two lines and both goroutines in seconds.
-Reports like this are also perfect AI-assistant input — it's evidence, not
+Reports like this are also perfect AI-assistant input, it's evidence, not
 vibes. Now you get three programs where the bug is much better hidden."
 
 ## Questions students actually ask
 
 - **"Why was the counter *sometimes* right without `-race`?"** The race is
   still there; the schedule just didn't interleave destructively. Races are
-  probabilistic — that's exactly why you need the detector.
-- **"Does `-race` catch every race?"** No — only races that occur (unordered
+  probabilistic, that's exactly why you need the detector.
+- **"Does `-race` catch every race?"** No, only races that occur (unordered
   accesses) during that particular run, in code that actually executed. It
   never false-positives, though.
 - **"Why not run `-race` in production always?"** Cost (see above). Do run
   it in CI, load tests, and canaries.
-- **"Is `counter++` atomic on x86 anyway?"** No — it compiles to multiple
+- **"Is `counter++` atomic on x86 anyway?"** No, it compiles to multiple
   instructions, and even single instructions don't give cross-goroutine
   ordering. The Go memory model, not the CPU, defines what's allowed.
-- **"Could I use a channel instead?"** Yes — send increments to one owner
+- **"Could I use a channel instead?"** Yes, send increments to one owner
   goroutine. Idiomatic when there's real ownership to model; overkill for a
   counter.

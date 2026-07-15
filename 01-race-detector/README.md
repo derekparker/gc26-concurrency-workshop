@@ -5,7 +5,7 @@
 This section teaches Go's built-in data race detector: what a data race
 actually is, how to read a race report, and how to choose the right fix
 (mutex, RWMutex, atomic, or channel). You'll follow an instructor-led demo,
-then debug three progressively sneakier buggy programs yourself — plus a
+then debug three progressively sneakier buggy programs yourself, plus a
 bonus lab on catching races in *tests* with `go test -race` and
 `testing/synctest`.
 
@@ -19,7 +19,7 @@ traces.
 One more reason this matters in 2026: as AI agents write more of our code,
 engineers spend less time writing and more time reviewing and debugging code
 they didn't write. A race report is *ground truth* about what the program
-actually did — paste one into your AI assistant and it fixes the real bug
+actually did, paste one into your AI assistant and it fixes the real bug
 instead of guessing. Mastering the tools that produce that evidence is the
 skill that compounds.
 
@@ -27,12 +27,12 @@ skill that compounds.
 
 | Time | Activity |
 |------|----------|
-| 0:00–0:20 | Instructor demo: [`demo/`](demo/) — counter race, reading the report, three fixes |
-| 0:20–0:30 | [Exercise 1: Stats Tracker](exercises/ex1-counter/) — invisible counter races |
-| 0:30–0:45 | [Exercise 2: Cache & Metrics](exercises/ex2-map/) — flaky map crashes |
-| 0:45–0:58 | [Exercise 3: Banking](exercises/ex3-banking/) — "looks synchronized but isn't" |
+| 0:00–0:20 | Instructor demo: [`demo/`](demo/), counter race, reading the report, three fixes |
+| 0:20–0:30 | [Exercise 1: Stats Tracker](exercises/ex1-counter/), invisible counter races |
+| 0:30–0:45 | [Exercise 2: Cache & Metrics](exercises/ex2-map/), flaky map crashes |
+| 0:45–0:58 | [Exercise 3: Banking](exercises/ex3-banking/), "looks synchronized but isn't" |
 | 0:58–1:00 | Wrap-up: when to run `-race`, what it can't find |
-| Bonus | [Exercise 4: TTL Cache Tests](exercises/ex4-testing/) — `go test -race` + `testing/synctest` (if time allows, or homework) |
+| Bonus | [Exercise 4: TTL Cache Tests](exercises/ex4-testing/), `go test -race` + `testing/synctest` (if time allows, or homework) |
 
 ## Using the Race Detector
 
@@ -51,13 +51,13 @@ synchronization operation (mutex lock/unlock, channel send/receive,
 `WaitGroup.Wait`, `atomic` ops, goroutine start...) is instrumented. Using
 vector clocks, the runtime tracks the **happens-before** relation defined by
 the [Go memory model](https://go.dev/ref/mem): if two conflicting accesses
-are not ordered by happens-before, that's a data race — *even if the accesses
+are not ordered by happens-before, that's a data race, *even if the accesses
 didn't physically collide on this run*.
 
 Two consequences worth internalizing:
 
 - **No false positives.** If `-race` reports a race, it is a real race. Don't
-  rationalize it away ("that's just a stats counter") — the compiler and CPU
+  rationalize it away ("that's just a stats counter"), the compiler and CPU
   are allowed to miscompile racy code in surprising ways.
 - **False negatives are possible.** The detector only sees code that actually
   *executes*, and only flags accesses that actually happen concurrently
@@ -92,14 +92,14 @@ How to read it:
 1. **The two accesses.** The first stack is the access that *triggered* the
    report; "Previous write/read" is the earlier, conflicting access. At least
    one of the two is always a write. Same address (`0x00c...`), two
-   goroutines, no ordering — that's the race.
+   goroutines, no ordering, that's the race.
 2. **Read vs write matters.** Write/write races corrupt data; read/write
    races return torn or stale values. Multi-word values (`time.Time`, maps,
    slices, interfaces, strings) can be observed *half-written*.
 3. **Goroutine creation sites** tell you which `go` statement launched each
-   party — often the fastest way to identify *which* worker/monitor is
+   party, often the fastest way to identify *which* worker/monitor is
    involved when both stacks look identical.
-4. One warning per racy *pair* — a single root cause (e.g. one unprotected
+4. One warning per racy *pair*, a single root cause (e.g. one unprotected
    struct) commonly produces many reports. Fix the shared state, not each
    report one at a time.
 
@@ -122,20 +122,20 @@ GORACE="strip_path_prefix=$PWD/" go run -race .  # shorter paths in reports
 
 ## Races in Tests and CI
 
-- Run `go test -race ./...` in CI. Non-negotiable for concurrent code — it's
+- Run `go test -race ./...` in CI. Non-negotiable for concurrent code, it's
   the cheapest place to catch a race, and the exit code fails the build.
 - The detector only finds races your tests *provoke*. Add tests that exercise
   concurrency deliberately (multiple goroutines hammering the API), and
-  remember `-race` lowers throughput — set timeouts accordingly.
+  remember `-race` lowers throughput, set timeouts accordingly.
 - **`testing/synctest`** (stable since Go 1.25) runs a test in a "bubble"
-  with a fake clock, making concurrent tests fast and deterministic — and the
+  with a fake clock, making concurrent tests fast and deterministic, and the
   race detector understands its synchronization, so `synctest` +`-race` is a
   powerful combination for testing concurrent code. The bonus lab,
   [Exercise 4](exercises/ex4-testing/), is a hands-on tour of both of these
   points: a green test suite hiding a race from CI, and a 2.4-second timing
   test rewritten to run in a bubble in ~0ms.
 - **`sync.WaitGroup.Go`** (Go 1.25) replaces the error-prone
-  `wg.Add(1)` / `go func() { defer wg.Done() ... }()` dance — you'll see it
+  `wg.Add(1)` / `go func() { defer wg.Done() ... }()` dance, you'll see it
   in the demo.
 
 ## What the Race Detector Won't Catch
@@ -146,7 +146,7 @@ GORACE="strip_path_prefix=$PWD/" go run -race .  # shorter paths in reports
 - **Logical races** that aren't data races: check-then-act bugs where every
   individual access is synchronized but the *sequence* isn't atomic
   (exercise 3 discusses this).
-- Deadlocks and goroutine leaks — that's what sections 02 and 03 are for.
+- Deadlocks and goroutine leaks, that's what sections 02 and 03 are for.
 
 ## Further Reading
 
