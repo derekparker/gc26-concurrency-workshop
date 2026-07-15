@@ -131,29 +131,31 @@ func (p *Pipeline) processor(name string) {
 
 // shipper handles the final shipping stage
 func (p *Pipeline) shipper() {
-	pprof.Label(context.TODO(), "shipper")
-	defer p.wg.Done()
-	defer close(p.done)
+	ls := pprof.Labels("job", "shipper")
+	pprof.Do(context.Background(), ls, func(_ context.Context) {
+		defer p.wg.Done()
+		defer close(p.done)
 
-	shipped := 0
-	// BUG: shipper closes after 10 orders, but we might send more
-	for shipped < 10 {
-		select {
-		case order := <-p.shipping:
-			log.Printf("[SHIPPER] Shipping order %d (processed by %s at %s)\n",
-				order.ID, order.ProcessedBy, order.ProcessedAt.Format("15:04:05"))
+		shipped := 0
+		// BUG: shipper closes after 10 orders, but we might send more
+		for shipped < 10 {
+			select {
+			case order := <-p.shipping:
+				log.Printf("[SHIPPER] Shipping order %d (processed by %s at %s)\n",
+					order.ID, order.ProcessedBy, order.ProcessedAt.Format("15:04:05"))
 
-			// Simulate shipping work
-			time.Sleep(200 * time.Millisecond)
+				// Simulate shipping work
+				time.Sleep(200 * time.Millisecond)
 
-			shipped++
-			log.Printf("[SHIPPER] Shipped %d orders so far\n", shipped)
-		case <-time.After(5 * time.Second):
-			log.Printf("[SHIPPER] Timeout waiting for orders, shutting down\n")
-			return
+				shipped++
+				log.Printf("[SHIPPER] Shipped %d orders so far\n", shipped)
+			case <-time.After(5 * time.Second):
+				log.Printf("[SHIPPER] Timeout waiting for orders, shutting down\n")
+				return
+			}
 		}
-	}
-	log.Printf("[SHIPPER] Shipped maximum orders (%d), shutting down\n", shipped)
+		log.Printf("[SHIPPER] Shipped maximum orders (%d), shutting down\n", shipped)
+	})
 }
 
 // SendOrder sends a new order to the pipeline
@@ -170,17 +172,20 @@ func (p *Pipeline) Wait() {
 }
 
 func generateOrders(count int) []Order {
+	// Deterministic seed so every run (and every workshop machine) produces
+	// the same orders, the same rejections, and the same deadlock.
+	r := rand.New(rand.NewSource(1))
 	orders := make([]Order, count)
-	for i := 0; i < count; i++ {
-		numItems := rand.Intn(5) // Some orders might have 0 items (invalid)
+	for i := range count {
+		numItems := r.Intn(5) // Some orders might have 0 items (invalid)
 		items := make([]string, numItems)
-		for j := 0; j < numItems; j++ {
+		for j := range numItems {
 			items[j] = fmt.Sprintf("item-%d", j+1)
 		}
 
 		orders[i] = Order{
 			ID:       i + 1,
-			Priority: rand.Intn(5) + 1,
+			Priority: r.Intn(5) + 1,
 			Items:    items,
 		}
 	}
@@ -196,15 +201,14 @@ func main() {
 	pipeline.Start()
 
 	// Generate and send orders
-	orders := generateOrders(15) // BUG: Generating 15 orders but shipper stops at 10
+	orders := generateOrders(25) // BUG: Generating 25 orders but shipper stops at 10
 
-	// Send orders concurrently to simulate real load
+	// Send orders to simulate real load
 	for _, order := range orders {
-		// Send each order in a goroutine to avoid blocking main
 		pipeline.SendOrder(order)
 
 		// Small delay between orders
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	log.Println("All orders submitted, waiting for pipeline to complete...")
@@ -219,9 +223,13 @@ func main() {
 	select {
 	case <-done:
 		log.Println("Pipeline completed successfully")
-	case <-time.After(30 * time.Second):
+	case <-time.After(10 * time.Second):
 		log.Println("Pipeline timeout - possible deadlock!")
-		// Program will hang here, perfect for Delve inspection
-		select {} // Hang forever to allow debugging
+		// Block main forever. With every goroutine now asleep and no timers
+		// left, the Go runtime aborts with:
+		//   fatal error: all goroutines are asleep - deadlock!
+		// Under Delve that fatal throw is an automatic stop: the process is
+		// frozen right at the moment of the deadlock, ready for inspection.
+		select {}
 	}
 }

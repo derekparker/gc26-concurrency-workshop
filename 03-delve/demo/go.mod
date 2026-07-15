@@ -1,3 +1,3 @@
-module github.com/derekparker/gophercon-2025/03-delve/demo
+module delve-demo
 
-go 1.21
+go 1.26

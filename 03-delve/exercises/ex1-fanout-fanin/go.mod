@@ -1,3 +1,3 @@
-module github.com/derekparker/gophercon-2025/03-delve/exercises/ex2-fanout-fanin
+module fanout-fanin
 
-go 1.21
+go 1.26
