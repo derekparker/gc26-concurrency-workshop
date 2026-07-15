@@ -1,19 +1,18 @@
-diff --git i/01-race-detector/demo/counter.go w/01-race-detector/demo/counter.go
-index 298a4c9..b186f8e 100644
---- i/01-race-detector/demo/counter.go
-+++ w/01-race-detector/demo/counter.go
-@@ -16,11 +16,10 @@ type incrementor struct {
- func (inc *incrementor) increment(wg *sync.WaitGroup) {
- 	defer wg.Done()
+diff --git a/01-race-detector/demo/counter.go b/01-race-detector/demo/counter.go
+index 6218487..0014adb 100644
+--- a/01-race-detector/demo/counter.go
++++ b/01-race-detector/demo/counter.go
+@@ -14,11 +14,10 @@ type incrementor struct {
+ }
  
+ func (inc *incrementor) increment() {
 -	inc.mu.Lock()
 -	defer inc.mu.Unlock()
 -
- 	for i := 0; i < 1000; i++ {
+ 	for range 100000 {
 +		inc.mu.Lock()
  		inc.counter++
 +		inc.mu.Unlock()
  	}
  }
- 
  

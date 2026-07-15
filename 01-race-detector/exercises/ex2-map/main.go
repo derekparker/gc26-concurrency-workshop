@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"math/rand"
 	"sync"
 	"time"
@@ -83,9 +84,7 @@ func (s *Service) GetMetric(metric string) int {
 // GetAllMetrics returns a snapshot of all metrics (called rarely)
 func (s *Service) GetAllMetrics() map[string]int {
 	result := make(map[string]int)
-	for k, v := range s.metrics {
-		result[k] = v
-	}
+	maps.Copy(result, s.metrics)
 	return result
 }
 
@@ -105,12 +104,15 @@ func cacheWorker(id int, svc *Service, wg *sync.WaitGroup) {
 
 	// Stable set of keys that this worker uses
 	myKeys := make([]string, 20)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		myKeys[i] = fmt.Sprintf("user_%d_%d", id, i)
 	}
 
 	// Simulate realistic cache usage pattern
-	for i := 0; i < 1000; i++ {
+	for range 300 {
+		// Simulate time between requests.
+		time.Sleep(time.Duration(1+rand.Intn(5)) * time.Millisecond)
+
 		// Pick a key from our stable set
 		key := myKeys[rand.Intn(len(myKeys))]
 
@@ -132,11 +134,6 @@ func cacheWorker(id int, svc *Service, wg *sync.WaitGroup) {
 			svc.InvalidateCacheEntry(keyToInvalidate)
 			writeCount++
 		}
-
-		// Small delay between operations
-		if i%100 == 0 {
-			time.Sleep(time.Microsecond * 10)
-		}
 	}
 
 	cacheHits := svc.GetMetric("cache.hits")
@@ -154,10 +151,13 @@ func metricsCollector(id int, svc *Service, wg *sync.WaitGroup) {
 	writeCount := 0
 	readCount := 0
 
-	for i := 0; i < 1000; i++ {
+	for range 200 {
+		// Simulate time between operations (handling a request, etc.).
+		time.Sleep(time.Duration(2+rand.Intn(7)) * time.Millisecond)
+
 		// heavily write-biased
 		if rand.Float32() < 0.90 {
-			// Record various metrics
+			// Record one of several metrics
 			metrics := []string{
 				fmt.Sprintf("worker.%d.requests", id),
 				fmt.Sprintf("worker.%d.errors", id),
@@ -166,21 +166,15 @@ func metricsCollector(id int, svc *Service, wg *sync.WaitGroup) {
 				"total.operations",
 			}
 
-			for _, metric := range metrics {
-				svc.RecordMetric(metric)
-				writeCount++
-			}
+			svc.RecordMetric(metrics[rand.Intn(len(metrics))])
+			svc.RecordMetric("total.operations")
+			writeCount += 2
 		} else {
 			// Occasionally read metrics for reporting
 			metric := fmt.Sprintf("worker.%d.requests", id)
 			value := svc.GetMetric(metric)
 			_ = value
 			readCount++
-		}
-
-		// Small delay to simulate work
-		if i%100 == 0 {
-			time.Sleep(time.Microsecond * 10)
 		}
 	}
 
@@ -237,7 +231,7 @@ func verifier(svc *Service, wg *sync.WaitGroup) {
 	}
 
 	// Verify we can read them back consistently
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		for _, key := range testKeys {
 			result, exists := svc.GetFromCache(key)
 			if !exists {
@@ -257,7 +251,7 @@ func verifier(svc *Service, wg *sync.WaitGroup) {
 	hitCount1 := result1.HitCount
 
 	// Access it a few more times
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		svc.GetFromCache(key)
 	}
 
@@ -287,14 +281,14 @@ func main() {
 
 	// Start cache workers (cache-heavy operations)
 	fmt.Println("Starting cache workers...")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		wg.Add(1)
 		go cacheWorker(i, svc, &wg)
 	}
 
 	// Start metrics collectors (write-heavy operations)
 	fmt.Println("Starting metrics collectors...")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		wg.Add(1)
 		go metricsCollector(i, svc, &wg)
 	}

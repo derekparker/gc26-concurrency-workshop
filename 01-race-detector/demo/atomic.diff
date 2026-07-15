@@ -1,0 +1,33 @@
+diff --git a/01-race-detector/demo/counter.go b/01-race-detector/demo/counter.go
+index 0014adb..d4ded8c 100644
+--- a/01-race-detector/demo/counter.go
++++ b/01-race-detector/demo/counter.go
+@@ -6,18 +6,16 @@ import (
+ 	"os"
+ 	"runtime/trace"
+ 	"sync"
++	"sync/atomic"
+ )
+ 
+ type incrementor struct {
+-	counter int
+-	mu      sync.Mutex
++	counter atomic.Int64
+ }
+ 
+ func (inc *incrementor) increment() {
+ 	for range 100000 {
+-		inc.mu.Lock()
+-		inc.counter++
+-		inc.mu.Unlock()
++		inc.counter.Add(1)
+ 	}
+ }
+ 
+@@ -40,5 +38,5 @@ func main() {
+ 	wg.Wait()
+ 
+ 	// Two goroutines, 100000 increments each. Should be 200000... right?
+-	fmt.Printf("Final counter: %d\n", inc.counter)
++	fmt.Printf("Final counter: %d\n", inc.counter.Load())
+ }

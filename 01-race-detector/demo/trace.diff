@@ -1,7 +1,7 @@
-diff --git i/01-race-detector/demo/counter.go w/01-race-detector/demo/counter.go
-index c33b5bf..298a4c9 100644
---- i/01-race-detector/demo/counter.go
-+++ w/01-race-detector/demo/counter.go
+diff --git a/01-race-detector/demo/counter.go b/01-race-detector/demo/counter.go
+index a9c6eaa..6218487 100644
+--- a/01-race-detector/demo/counter.go
++++ b/01-race-detector/demo/counter.go
 @@ -2,6 +2,9 @@ package main
  
  import (
@@ -12,7 +12,7 @@ index c33b5bf..298a4c9 100644
  	"sync"
  )
  
-@@ -22,6 +25,15 @@ func (inc *incrementor) increment(wg *sync.WaitGroup) {
+@@ -20,6 +23,15 @@ func (inc *incrementor) increment() {
  }
  
  func main() {
@@ -28,4 +28,3 @@ index c33b5bf..298a4c9 100644
  	var wg sync.WaitGroup
  	inc := &incrementor{}
  
-  
