@@ -1,16 +1,30 @@
 package main
 
 import (
-	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime/trace"
 	"sync"
+	"time"
 )
 
+// A tiny two-goroutine pipeline: a sender fetches messages from an HTTP API
+// and pushes them down a channel, and a receiver consumes them.
+//
+//	go run channels.go
+//	go tool trace channel.trace
 func main() {
+	// A local stand-in for a remote API. Each request takes ~20ms.
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		fmt.Fprintf(w, "response for id=%s", r.URL.Query().Get("id"))
+	}))
+	defer api.Close()
+
 	f, err := os.Create("channel.trace")
 	if err != nil {
 		log.Fatal("Error creating trace file:", err)
@@ -23,45 +37,35 @@ func main() {
 	var wg sync.WaitGroup
 	ch := make(chan string, 5)
 
-	ctx := context.Background()
-	ctx, task := trace.NewTask(ctx, "requestAndSend")
-	defer task.End()
-
 	wg.Add(2)
-	go sender(ch, &wg, ctx)
-	go receiver(ch, &wg, ctx)
+	go sender(api.URL, ch, &wg)
+	go receiver(ch, &wg)
 
 	wg.Wait()
 }
 
-func sender(ch chan string, wg *sync.WaitGroup, ctx context.Context) {
+func sender(apiURL string, ch chan string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for i := range 5 {
-		trace.Log(ctx, "httpbin request", fmt.Sprintf("%d", i))
+		resp, err := http.Get(fmt.Sprintf("%s/?id=%d", apiURL, i))
+		if err != nil {
+			log.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Fatal(err)
+		}
 
-		var resp *http.Response
-		trace.WithRegion(ctx, "HTTP request", func() {
-			var err error
-			resp, err = http.Get("https://httpbin.org/delay/0.01")
-			if err != nil {
-				log.Fatal(err)
-			}
-			defer resp.Body.Close()
-		})
-
-		trace.WithRegion(ctx, "channel send task", func() {
-			ch <- fmt.Sprintf("message %d: %s", i, resp.Body)
-		})
+		ch <- fmt.Sprintf("message %d: %s", i, body)
 	}
 	close(ch)
 }
 
-func receiver(ch chan string, wg *sync.WaitGroup, ctx context.Context) {
+func receiver(ch chan string, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	trace.WithRegion(ctx, "chan read loop", func() {
-		for msg := range ch {
-			fmt.Printf("Received: size %d\n", len(msg))
-		}
-	})
+	for msg := range ch {
+		fmt.Printf("Received: %q\n", msg)
+	}
 }

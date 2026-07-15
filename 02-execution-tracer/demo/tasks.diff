@@ -1,71 +1,83 @@
-diff --git i/02-execution-tracer/demo/channels.go w/02-execution-tracer/demo/channels.go
-index d565a8c..7499ef7 100644
---- i/02-execution-tracer/demo/channels.go
-+++ w/02-execution-tracer/demo/channels.go
+diff --git a/02-execution-tracer/demo/channels.go b/02-execution-tracer/demo/channels.go
+index b65a6d7..1726849 100644
+--- a/02-execution-tracer/demo/channels.go
++++ b/02-execution-tracer/demo/channels.go
 @@ -1,6 +1,7 @@
  package main
  
  import (
 +	"context"
  	"fmt"
+ 	"io"
  	"log"
- 	"net/http"
-@@ -22,28 +23,46 @@ func main() {
+@@ -34,38 +35,53 @@ func main() {
+ 	trace.Start(f)
+ 	defer trace.Stop()
+ 
++	// One task groups everything these two goroutines do for this "request".
++	// Every region and log created with this ctx is attached to the task, so
++	// the /trace viewer and /usertasks page can show them as one unit of work.
++	ctx, task := trace.NewTask(context.Background(), "requestAndSend")
++	defer task.End()
++
  	var wg sync.WaitGroup
  	ch := make(chan string, 5)
  
-+	ctx := context.Background()
-+
  	wg.Add(2)
--	go sender(ch, &wg)
+-	go sender(api.URL, ch, &wg)
 -	go receiver(ch, &wg)
-+	go sender(ch, &wg, ctx)
-+	go receiver(ch, &wg, ctx)
++	go sender(ctx, api.URL, ch, &wg)
++	go receiver(ctx, ch, &wg)
  
  	wg.Wait()
  }
  
--func sender(ch chan string, wg *sync.WaitGroup) {
-+func sender(ch chan string, wg *sync.WaitGroup, ctx context.Context) {
-+	ctx, task := trace.NewTask(ctx, "requestAndSend")
-+	defer task.End()
-+
+-func sender(apiURL string, ch chan string, wg *sync.WaitGroup) {
++func sender(ctx context.Context, apiURL string, ch chan string, wg *sync.WaitGroup) {
  	defer wg.Done()
  	for i := range 5 {
--		resp, err := http.Get("https://httpbin.org/delay/0.01")
+-		resp, err := http.Get(fmt.Sprintf("%s/?id=%d", apiURL, i))
 -		if err != nil {
 -			log.Fatal(err)
 -		}
--		defer resp.Body.Close()
--		ch <- fmt.Sprintf("message %d: %s", i, resp.Body)
-+		trace.Log(ctx, "httpbin request", fmt.Sprintf("%d", i))
-+
-+		var resp *http.Response
-+		trace.WithRegion(ctx, "HTTP request", func() {
-+			var err error
-+			resp, err = http.Get("https://httpbin.org/delay/0.01")
+-		body, err := io.ReadAll(resp.Body)
+-		resp.Body.Close()
+-		if err != nil {
+-			log.Fatal(err)
+-		}
++		trace.Log(ctx, "sending request", fmt.Sprintf("%d", i))
+ 
+-		ch <- fmt.Sprintf("message %d: %s", i, body)
++		var body []byte
++		trace.WithRegion(ctx, "http request", func() {
++			resp, err := http.Get(fmt.Sprintf("%s/?id=%d", apiURL, i))
 +			if err != nil {
 +				log.Fatal(err)
 +			}
-+			defer resp.Body.Close()
++			body, err = io.ReadAll(resp.Body)
++			resp.Body.Close()
++			if err != nil {
++				log.Fatal(err)
++			}
 +		})
 +
-+		trace.WithRegion(ctx, "channel send task", func() {
-+			ch <- fmt.Sprintf("message %d: %s", i, resp.Body)
++		trace.WithRegion(ctx, "channel send", func() {
++			ch <- fmt.Sprintf("message %d: %s", i, body)
 +		})
  	}
  	close(ch)
  }
  
 -func receiver(ch chan string, wg *sync.WaitGroup) {
-+func receiver(ch chan string, wg *sync.WaitGroup, ctx context.Context) {
++func receiver(ctx context.Context, ch chan string, wg *sync.WaitGroup) {
  	defer wg.Done()
-+
-+	_, task := trace.NewTask(ctx, "receive task")
-+	defer task.End()
-+
- 	for msg := range ch {
- 		fmt.Printf("Received: size %d\n", len(msg))
- 	}
-
-  
+ 
+-	for msg := range ch {
+-		fmt.Printf("Received: %q\n", msg)
+-	}
++	trace.WithRegion(ctx, "receive loop", func() {
++		for msg := range ch {
++			fmt.Printf("Received: %q\n", msg)
++		}
++	})
+ }

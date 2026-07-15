@@ -3,25 +3,49 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime/trace"
 	"sync"
 	"time"
 )
 
-type APIResult struct {
-	URL      string
-	Duration time.Duration
-	Error    error
+// The nightly "record shipper": download 200 records from an internal API,
+// compress each one, and append it to an archive file.
+//
+// The previous owner made downloading concurrent — 8 workers fetch records
+// in parallel — and left this note:
+//
+//	"Should take ~1s now (200 records / 8 workers x 30ms per fetch), but
+//	 it still takes over 5 seconds?! Tried 16 and 32 workers: NO change.
+//	 The API team swears it isn't them. I give up."
+//
+// Adding workers doesn't help. CPU profiles show compression, but the
+// machine is 90% idle while this runs. Logs show nothing slow. Your job:
+// use the execution tracer to find where the time actually goes, then fix
+// it. See README.md.
+
+const (
+	numRecords = 200
+	numWorkers = 8
+	fetchDelay = 30 * time.Millisecond // simulated API latency
+)
+
+type record struct {
+	id   int
+	body []byte
 }
 
 func main() {
-	// Add trace instrumentation here.
-	// NOTE: Pretend this is a long running process and consider using
-	// a flight recorder instead of a program wide trace:
-	// https://pkg.go.dev/golang.org/x/exp/trace#NewFlightRecorder
+	// A local stand-in for the internal API.
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(fetchDelay)
+		fmt.Fprintf(w, "payload for record %s", r.URL.Query().Get("id"))
+	}))
+	defer api.Close()
 
 	f, err := os.Create("io.trace")
 	if err != nil {
@@ -29,213 +53,108 @@ func main() {
 	}
 	defer f.Close()
 
-	trace.Start(f)
+	if err := trace.Start(f); err != nil {
+		log.Fatal(err)
+	}
 	defer trace.Stop()
 
-	ctx, task := trace.NewTask(context.Background(), "main")
+	ctx, task := trace.NewTask(context.Background(), "shipRecords")
 	defer task.End()
 
-	trace.WithRegion(ctx, "simulateNetworkLoad", func() {
-		simulateNetworkLoad()
-	})
+	archive, err := os.Create("archive.out")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer archive.Close()
+
+	start := time.Now()
+
+	jobs := make(chan int)
+	results := make(chan record)
+
+	// Fan out: 8 workers fetch records concurrently.
+	var workers sync.WaitGroup
+	workers.Add(numWorkers)
+	for range numWorkers {
+		go worker(ctx, api.URL, jobs, results, &workers)
+	}
+
+	// Fan in: a collector appends each record to the archive.
+	var collectorWG sync.WaitGroup
+	collectorWG.Add(1)
+	go collector(ctx, archive, results, &collectorWG)
+
+	for id := range numRecords {
+		jobs <- id
+	}
+	close(jobs)
+	workers.Wait()
+	close(results)
+	collectorWG.Wait()
+
+	elapsed := time.Since(start)
+	fmt.Printf("shipped %d records in %v (%.1f records/sec)\n",
+		numRecords, elapsed.Round(time.Millisecond),
+		float64(numRecords)/elapsed.Seconds())
+	expected := numRecords / numWorkers * fetchDelay
+	fmt.Printf("expected ~%v with %d workers... where does the time go?\n", expected, numWorkers)
 }
 
-func simulateNetworkLoad() {
-	urls := []string{
-		"https://httpbin.org/delay/1",
-		"https://httpbin.org/delay/2",
-		"https://httpbin.org/delay/3",
-	}
-
-	// Create channels for each API call result
-	resultChannels := make([]chan APIResult, len(urls))
-	for i := range resultChannels {
-		resultChannels[i] = make(chan APIResult, 1)
-	}
-
-	// Create a channel for aggregated results
-	aggregatedResults := make(chan []APIResult, 1)
-
-	var wg sync.WaitGroup
-
-	// Start API call goroutines
-	for i, url := range urls {
-		wg.Add(1)
-		go func(url string, resultChan chan APIResult) {
-			defer wg.Done()
-
-			// TODO: Add trace instrumentation here
-			ctx, task := trace.NewTask(context.Background(), "apiCall")
-			defer task.End()
-
-			trace.WithRegion(ctx, "callAPI:"+url, func() {
-				start := time.Now()
-				err := callAPI(ctx, url)
-				// Can we use this to determine when to output trace results?
-				duration := time.Since(start)
-
-				// Send result to channel
-				resultChan <- APIResult{
-					URL:      url,
-					Duration: duration,
-					Error:    err,
-				}
-			})
-		}(url, resultChannels[i])
-	}
-
-	// Start goroutines that wait on individual results (these will be blocked)
-	for i, ch := range resultChannels {
-		wg.Add(1)
-		go func(idx int, resultChan chan APIResult) {
-			defer wg.Done()
-
-			// TODO: Add trace instrumentation here
-			ctx, task := trace.NewTask(context.Background(), "resultWaiter")
-			defer task.End()
-
-			// This goroutine will be blocked waiting for the result
-			var result APIResult
-			trace.WithRegion(ctx, fmt.Sprintf("waitForResult:%d", idx), func() {
-				result = <-resultChan
-			})
-
-			if result.Error != nil {
-				fmt.Printf("Result %d: %s failed: %v\n", idx, result.URL, result.Error)
-			} else {
-				fmt.Printf("Result %d: %s completed in %v\n", idx, result.URL, result.Duration)
-			}
-		}(i, ch)
-	}
-
-	// Start a goroutine that aggregates all results (will be blocked until all are ready)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		// TODO: Add trace instrumentation here
-		ctx, task := trace.NewTask(context.Background(), "aggregator")
-		defer task.End()
-
-		results := make([]APIResult, 0, len(resultChannels))
-
-		// This will block on each channel sequentially
-		for i, ch := range resultChannels {
-			// Create a new channel to re-send the result
-			// since the individual waiter goroutines also need it
-			resCopy := make(chan APIResult, 1)
-			go func(idx int, originalCh chan APIResult) {
-				trace.WithRegion(ctx, fmt.Sprintf("readOriginalCh:%d", i), func() {
-					r := <-originalCh
-					resCopy <- r
-					originalCh <- r // Send it back for the individual waiter
-				})
-			}(i, ch)
-			var result APIResult
-			trace.WithRegion(ctx, fmt.Sprintf("aggregateWait:%d", i), func() {
-				result = <-resCopy
-			})
-			results = append(results, result)
-		}
-
-		aggregatedResults <- results
-	}()
-
-	// Start a final goroutine that waits for all aggregated results
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		// TODO: Add trace instrumentation here
-		ctx, task := trace.NewTask(context.Background(), "summarizer")
-		defer task.End()
-
-		// This will block until aggregation is complete
-		var allResults []APIResult
-		trace.WithRegion(ctx, "waitForAggregated", func() {
-			allResults = <-aggregatedResults
+// worker downloads each record it's assigned and passes it on for
+// collection.
+func worker(ctx context.Context, apiURL string, jobs <-chan int, results chan<- record, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for id := range jobs {
+		var rec record
+		trace.WithRegion(ctx, "fetch", func() {
+			rec = fetch(apiURL, id)
 		})
-
-		var totalDuration time.Duration
-		var successCount int
-
-		for _, result := range allResults {
-			if result.Error == nil {
-				totalDuration += result.Duration
-				successCount++
-			}
-		}
-
-		if successCount > 0 {
-			avgDuration := totalDuration / time.Duration(successCount)
-			fmt.Printf("\n=== Summary ===\n")
-			fmt.Printf("Successful calls: %d/%d\n", successCount, len(allResults))
-			fmt.Printf("Average duration: %v\n", avgDuration)
-			fmt.Printf("Total duration: %v\n", totalDuration)
-		}
-	}()
-
-	// Create additional monitoring goroutines that will show blocking behavior
-	done := make(chan struct{})
-
-	// Monitor goroutine that periodically checks status
-	go func() {
-		ctx, task := trace.NewTask(context.Background(), "monitor")
-		defer task.End()
-
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				// TODO: Add trace instrumentation here
-				trace.WithRegion(ctx, "statusCheck", func() {
-					fmt.Printf(".")
-				})
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	wg.Wait()
-	close(done)
-	fmt.Println("\nAll operations completed")
+		trace.WithRegion(ctx, "send result", func() {
+			results <- rec
+		})
+	}
 }
 
-func callAPI(ctx context.Context, url string) error {
-	// Add timeout to context
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+// collector compresses each record and appends it to the archive.
+// Compression is CPU work, ~25ms per record.
+func collector(ctx context.Context, archive *os.File, results <-chan record, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for rec := range results {
+		var compressed []byte
+		trace.WithRegion(ctx, "compress", func() {
+			compressed = compress(rec)
+		})
+		trace.WithRegion(ctx, "append to archive", func() {
+			if _, err := archive.Write(compressed); err != nil {
+				log.Fatal(err)
+			}
+		})
+	}
+}
 
-	// TODO: Add trace instrumentation here
-	trace.WithRegion(ctx, "preprocessing", func() {
-		// Simulate some processing
-		time.Sleep(10 * time.Millisecond)
-	})
-
-	r, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+func fetch(apiURL string, id int) record {
+	resp, err := http.Get(fmt.Sprintf("%s/?id=%d", apiURL, id))
 	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
+		log.Fatal(err)
 	}
-
-	client := &http.Client{}
-
-	// TODO: Add trace instrumentation here
-	var resp *http.Response
-	trace.WithRegion(ctx, "httpRequest", func() {
-		resp, err = client.Do(r)
-	})
-
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
 	if err != nil {
-		return fmt.Errorf("executing request: %w", err)
+		log.Fatal(err)
 	}
-	defer resp.Body.Close()
+	return record{id: id, body: body}
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+// compress squeezes a record down for the archive. It's pure CPU work that
+// takes ~25ms per record.
+func compress(rec record) []byte {
+	spin(25 * time.Millisecond)
+	return fmt.Appendf(nil, "compressed(%d bytes) record %d\n", len(rec.body), rec.id)
+}
+
+// spin simulates CPU-bound work for roughly duration d.
+func spin(d time.Duration) {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
 	}
-
-	return nil
 }

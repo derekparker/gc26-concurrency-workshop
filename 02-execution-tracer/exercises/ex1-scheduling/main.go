@@ -5,8 +5,28 @@ import (
 	"log"
 	"os"
 	"runtime/trace"
+	"slices"
 	"sync"
 	"time"
+)
+
+// This little "service" does two things at once:
+//
+//  1. Crunches a big backlog of analytics batches (CPU-bound work).
+//  2. Sends a heartbeat every 10ms. In production, missing a few
+//     heartbeats in a row gets the instance killed by the orchestrator.
+//
+// The ops team reports the service is "randomly getting restarted under
+// load". CPU profiles just show batch work (which is expected!), and the
+// logs only show the symptom, printed at exit below: heartbeat p99/max
+// latency is way over the 10ms target.
+//
+// Your job: use the execution tracer to find out WHY the heartbeat
+// goroutine can't run on time, then fix it. See README.md.
+
+const (
+	numBatches      = 1000
+	heartbeatPeriod = 10 * time.Millisecond
 )
 
 func main() {
@@ -16,43 +36,72 @@ func main() {
 	}
 	defer f.Close()
 
-	trace.Start(f)
+	if err := trace.Start(f); err != nil {
+		log.Fatal(err)
+	}
 	defer trace.Stop()
 
-	var wg sync.WaitGroup
+	// Start the heartbeat before the batch work begins.
+	stop := make(chan struct{})
+	intervalsCh := make(chan []time.Duration, 1)
+	go heartbeat(stop, intervalsCh)
+
+	// Process the backlog.
 	start := time.Now()
-
-	for i := range 1000 {
-		wg.Add(1)
-		go expensiveComputation(i, &wg)
+	var wg sync.WaitGroup
+	for i := range numBatches {
+		wg.Go(func() {
+			processBatch(i)
+		})
 	}
-
 	wg.Wait()
-	fmt.Printf("Took: %v\n", time.Since(start))
+	elapsed := time.Since(start)
+
+	close(stop)
+	intervals := <-intervalsCh
+
+	slices.Sort(intervals)
+	fmt.Printf("processed %d batches in %v\n", numBatches, elapsed)
+	if n := len(intervals); n > 0 {
+		fmt.Printf("heartbeat interval: target %v | p50 %v | p99 %v | max %v\n",
+			heartbeatPeriod,
+			intervals[n/2].Round(time.Millisecond),
+			intervals[n*99/100].Round(time.Millisecond),
+			intervals[n-1].Round(time.Millisecond))
+	}
 }
 
-func expensiveComputation(id int, wg *sync.WaitGroup) {
-	defer wg.Done()
-	// Simulate CPU-intensive work with actual computation
-	result := float64(id)
-	iterations := 100000 + (id * 1000) // Vary iterations based on id
+// heartbeat records the observed time between ticks and sends the recorded
+// intervals on out when stop is closed. If the scheduler runs this goroutine
+// promptly, every interval is ~10ms.
+func heartbeat(stop <-chan struct{}, out chan<- []time.Duration) {
+	var intervals []time.Duration
+	ticker := time.NewTicker(heartbeatPeriod)
+	defer ticker.Stop()
 
-	for i := 0; i < iterations; i++ {
-		// Perform various mathematical operations
-		result = result * 1.000001
-		result = result / 1.0000005
-		if i%100 == 0 {
-			result = result + float64(id)
-			result = result - float64(id)/2.0
-		}
-		// Add some more complex operations
-		if i%500 == 0 {
-			for j := 0; j < 10; j++ {
-				result = result * 1.01 / 1.005
-			}
+	last := time.Now()
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			intervals = append(intervals, now.Sub(last))
+			last = now
+		case <-stop:
+			out <- intervals
+			return
 		}
 	}
+}
 
-	// Use the result to prevent compiler optimization
-	_ = result
+// processBatch simulates CPU-bound work on one batch (~a few ms).
+func processBatch(id int) {
+	result := float64(id)
+	for i := range 4_000_000 {
+		result = result*1.000001 + float64(i%7)
+		result = result / 1.0000005
+	}
+	// Use the result so the compiler can't remove the loop.
+	if result == -1 {
+		fmt.Println("impossible", result)
+	}
 }

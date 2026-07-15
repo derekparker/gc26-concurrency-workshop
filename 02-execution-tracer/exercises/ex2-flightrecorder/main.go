@@ -4,99 +4,190 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
-	"os"
-	"time"
-
+	"math/rand/v2"
 	"runtime/trace"
+	"sync"
+	"time"
 )
 
-type APIResult struct {
-	URL      string
-	Duration time.Duration
-	Error    error
+// A long-running "profile lookup service", condensed into one file. Eight
+// workers serve a steady stream of requests from an in-memory cache. The
+// SLO says p99 < 50ms; the dashboard says requests normally finish in well
+// under a millisecond.
+//
+// The on-call report: "a couple of times an hour, a burst of requests takes
+// 250ms+. We can't reproduce it, and by the time we see it on the dashboard
+// it's long over."
+//
+// You can't run trace.Start for an hour and dig through gigabytes of trace.
+// This is exactly what runtime/trace.FlightRecorder (official API since Go
+// 1.25) is for: keep the last few seconds of trace in a ring buffer, and
+// snapshot it AT THE MOMENT a slow request is detected.
+//
+// Your job (see README.md):
+//   1. Create and start a FlightRecorder (TODO 1).
+//   2. When a request breaches slowThreshold, write a snapshot to
+//      flightrecorder.trace — exactly once (TODO 2).
+//   3. Open the snapshot in `go tool trace` and explain the latency spike.
+
+const (
+	runFor        = 12 * time.Second
+	numWorkers    = 8
+	cacheEntries  = 50_000
+	slowThreshold = 100 * time.Millisecond
+)
+
+// TODO 1: declare a *trace.FlightRecorder here (package scope is fine for
+// this exercise), create it in main with a FlightRecorderConfig — pick a
+// MinAge and MaxBytes — and Start() it before the workers launch.
+//
+// https://pkg.go.dev/runtime/trace#FlightRecorder
+
+type service struct {
+	mu    sync.RWMutex
+	cache map[int]string
+}
+
+// handle serves one request: look up an entry and render a response.
+func (s *service) handle(ctx context.Context, id int) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	v := s.cache[id%cacheEntries]
+	spin(200 * time.Microsecond) // render the response
+	return v
+}
+
+// refresh keeps the cache warm. Most refreshes are incremental and cheap;
+// every fourth one is a full revalidation.
+func (s *service) refresh(ctx context.Context, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	trace.WithRegion(ctx, "refresh cache", func() {
+		if n%4 != 3 {
+			// Incremental: touch a few entries.
+			for i := range 100 {
+				s.cache[rand.IntN(cacheEntries)] = fmt.Sprintf("value-%d-%d", n, i)
+			}
+			return
+		}
+		// Full revalidation: rebuild and verify every entry.
+		next := make(map[int]string, cacheEntries)
+		for i := range cacheEntries {
+			next[i] = fmt.Sprintf("value-%d-%d", n, i)
+		}
+		spin(250 * time.Millisecond) // "verify" the rebuilt entries
+		s.cache = next
+	})
+}
+
+// refresher runs cache refreshes in the background until stop is closed.
+func (s *service) refresher(ctx context.Context, stop <-chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for n := 0; ; n++ {
+		select {
+		case <-ticker.C:
+			s.refresh(ctx, n)
+		case <-stop:
+			return
+		}
+	}
+}
+
+// worker serves requests until stop is closed, reporting each request's
+// latency on the latencies channel.
+func (s *service) worker(ctx context.Context, w int, stop <-chan struct{}, latencies chan<- time.Duration, wg *sync.WaitGroup) {
+	defer wg.Done()
+	ctx, task := trace.NewTask(ctx, fmt.Sprintf("worker-%d", w))
+	defer task.End()
+	for {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+
+		time.Sleep(time.Duration(1+rand.IntN(4)) * time.Millisecond)
+
+		start := time.Now()
+		trace.WithRegion(ctx, "handle request", func() {
+			s.handle(ctx, rand.IntN(cacheEntries))
+		})
+		elapsed := time.Since(start)
+		latencies <- elapsed
+
+		if elapsed > slowThreshold {
+			log.Printf("SLOW request: %v (threshold %v)", elapsed, slowThreshold)
+			// TODO 2: this is the "rare event just happened" moment.
+			// Snapshot the flight recorder to flightrecorder.trace —
+			// exactly once (sync.Once), and in a new goroutine so the
+			// worker isn't stalled while the snapshot is written.
+		}
+	}
 }
 
 func main() {
-	f, err := os.Create("flightrecorder.trace")
-	if err != nil {
-		log.Fatal(err)
-	}
-	fr := trace.NewFlightRecorder(trace.FlightRecorderConfig{})
-	if err := fr.Start(); err != nil {
-		log.Fatal(err)
-	}
-	defer fr.Stop()
+	svc := &service{cache: make(map[int]string, cacheEntries)}
+	ctx := context.Background()
+	svc.refresh(ctx, 3) // initial full load
 
-	urls := []string{
-		"https://httpbin.org/delay/1",
-		"https://httpbin.org/delay/2",
-		"https://httpbin.org/delay/3",
+	stop := make(chan struct{})
+	latencies := make(chan time.Duration, 1024)
+
+	var bg sync.WaitGroup
+	bg.Add(1 + numWorkers)
+	go svc.refresher(ctx, stop, &bg)
+	for w := range numWorkers {
+		go svc.worker(ctx, w, stop, latencies, &bg)
 	}
 
-	// Channel to communicate results
-	results := make(chan APIResult, len(urls))
-
-	// Goroutine that makes API calls
+	// Per-second latency report: this is all the visibility the "dashboard"
+	// gives you. Note how vague it is compared to what the trace will show.
 	go func() {
-		for _, url := range urls {
-			start := time.Now()
-			err := callAPI(url)
-			duration := time.Since(start)
-			if duration > time.Second {
-				if _, err := fr.WriteTo(f); err != nil {
-					log.Fatal(err)
-				}
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		var window []time.Duration
+		for {
+			select {
+			case l := <-latencies:
+				window = append(window, l)
+			case <-ticker.C:
+				fmt.Println(summarize(window))
+				window = window[:0]
+			case <-stop:
+				return
 			}
-
-			results <- APIResult{
-				URL:      url,
-				Duration: duration,
-				Error:    err,
-			}
-		}
-		close(results)
-	}()
-
-	// Goroutine that reads results
-	go func() {
-		for result := range results {
-			if result.Error != nil {
-				fmt.Printf("❌ %s failed: %v (took %v)\n", result.URL, result.Error, result.Duration)
-			} else {
-				fmt.Printf("✅ %s succeeded in %v\n", result.URL, result.Duration)
-			}
-
-			// TODO: Check if duration exceeds threshold (e.g., 2.5 seconds)
-			// and if so, output the flight recorder trace to a file.
 		}
 	}()
 
-	// Simple wait to ensure goroutines complete
-	// In a real application, you'd use sync.WaitGroup or channels
-	time.Sleep(15 * time.Second)
-	fmt.Println("\nAll operations completed")
+	time.Sleep(runFor)
+	close(stop)
+	bg.Wait()
+	fmt.Println("done")
 }
 
-func callAPI(url string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
+func summarize(window []time.Duration) string {
+	if len(window) == 0 {
+		return "no requests"
 	}
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("executing request: %w", err)
+	var sum, max time.Duration
+	for _, l := range window {
+		sum += l
+		if l > max {
+			max = l
+		}
 	}
-	defer resp.Body.Close()
+	return fmt.Sprintf("%4d requests | avg %8v | max %8v",
+		len(window),
+		(sum / time.Duration(len(window))).Round(10*time.Microsecond),
+		max.Round(10*time.Microsecond))
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+// spin simulates CPU-bound work for roughly duration d.
+func spin(d time.Duration) {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
 	}
-
-	return nil
 }
