@@ -30,3 +30,6 @@ Thumbs.db
 
 # Local planning / agent design docs
 docs/
+
+# Local presenter tooling
+sync-to-vault.sh
