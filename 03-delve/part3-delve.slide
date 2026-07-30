@@ -52,11 +52,15 @@ The engineer who can produce that evidence stays the one steering.
 
 ## Setup
 
-Delve **1.26.0 or newer** is required for Go 1.26 support. This material was
-verified with Delve 1.27.0 on Go 1.26.
+Use **Delve 1.27.0 or newer**. Verified with 1.27.0 on Go 1.26.
 
 	go install github.com/go-delve/delve/cmd/dlv@latest
 	dlv version
+
+Delve enforces a supported Go range and refuses to run outside it:
+
+	Delve 1.26.0 – 1.26.3    supports Go 1.24 – 1.26
+	Delve 1.27.0             supports Go 1.25 – 1.27      <- only this one does Go 1.27
 
 Three ways to start a session, all used in this part:
 
@@ -65,6 +69,12 @@ Three ways to start a session, all used in this part:
 	dlv attach <pid>     # debug an already-running process
 
 : Verify your setup now: cd 03-delve/demo && go build ./... && dlv version
+:
+: The version pairing matters more than usual this month. Go 1.27 is expected in August 2026, and only Delve 1.27.0 supports it. On a mismatch you get a hard error, not a warning: "Version of Delve is too old for Go version go1.27 (maximum supported version 1.26...)".
+:
+: --check-go-version=false downgrades it to a warning, but the warning literally says "undefined behavior" — wrong variable values, broken stacks. Upgrade instead.
+:
+: Also worth telling the room: ./setup.sh only installs Delve when it's missing. It does not check the version of an existing install, so anyone who installed dlv a year ago will sail through setup and fail here. Have them run `dlv version`.
 
 ## Keep your variables inspectable
 
@@ -78,7 +88,12 @@ For binaries you build yourself:
 Without these, half your locals are "optimized out" and you'll blame the
 debugger.
 
+Watch for `-trimpath` too — release builds often set it, and it strips the
+paths Delve needs to find your source.
+
 : Worth 30 seconds. It's the single most common reason someone concludes "Delve doesn't work".
+:
+: trimpath is the second most common. Delve 1.26.1 and later detect it and warn, rather than silently giving you a session with no source listing.
 
 ## The five commands that solve most concurrency bugs
 
@@ -114,9 +129,13 @@ you open a single file.
 
 	goroutines -with user
 	goroutines -with/-without (userloc|curloc|goloc|startloc) <substr>
-	goroutines -group (userloc|label <key>)
+	goroutines -with/-without running
+	goroutines -group (userloc|curloc|goloc|startloc|running|user)
+	goroutines -group label <key>
 	goroutines -with label key=value
 	goroutines -exec <cmd>        # run a command on every match
+
+One syntax gotcha: the expression in `-chan <expr>` must not contain spaces.
 
 If your services set pprof labels via `pprof.Do`, Delve turns them into a
 query language for goroutines.
@@ -162,9 +181,13 @@ runs next.
 	on <bp> <command>            # run a command at the stop
 	trace <locspec>              # notify, don't stop
 	display -a <expr>            # re-print on every stop
-	watch -w <expr>              # hardware watchpoint: break on DATA, not code
+	watch [-r|-w|-rw] <expr>     # hardware watchpoint: break on DATA, not code
+
+Before exercise 3: writes that **don't change the value** may not be reported.
 
 : The watchpoint is the setup for exercise 3 — break on data, not code. It's the only way to catch a wrong-value bug where every access is properly locked.
+:
+: The caveat matters when someone expects a watchpoint to fire on every write that touched the variable. It fires on writes that CHANGED it. If a goroutine writes the same value back, you may not stop.
 
 ## Channel forensics
 
@@ -233,11 +256,19 @@ Non-interactive sessions for repeatable investigations — and for agents:
 
 	# lightweight function tracing: args, returns, timestamps, no code changes
 	dlv trace --timestamp 'SendOrder|Checkout'
+	dlv trace -v 3 'SendOrder'          # 0=values 1=types 2=inline 3=expanded 4=full
+	dlv trace --follow-calls 2 'Checkout'   # trace callees too
+
+And inside a session, capture everything you do to a file:
+
+	(dlv) transcript session.txt
 
 Delve also embeds Starlark (`source script.star`) for programmatic sessions —
 e.g. iterate all goroutines and dump selected frame variables.
 
 : dlv trace is underrated: it's printf debugging without editing or rebuilding the program.
+:
+: transcript is the concrete answer to "how do I hand this to an AI assistant" — and to "how do I attach evidence to a bug report". -t truncates an existing file, -x suppresses stdout, transcript -off stops it.
 
 ## Editors and DAP
 
@@ -249,11 +280,15 @@ Same engine — so everything in this section exists there too:
 - VS Code's **CALL STACK** view is `goroutines`
 - conditional breakpoints are a right-click away
 - the **DEBUG CONSOLE** accepts `dlv` expressions
+- **data breakpoints** (Delve 1.26.2) are watchpoints — exercise 3's technique,
+  now a right-click in the Variables pane
 
 Use the GUI day to day if you like. But the CLI is what you have over SSH on the
 box where prod is burning — and it's what scripts and agents can drive.
 
-: Recent Delve releases keep improving DAP: multi-process follow-exec targets, suspended breakpoints.
+: DAP is where most recent Delve work has landed, and it has closed much of the gap with the CLI: data breakpoints (1.26.2), suspended breakpoints and multi-process follow-exec targets (1.26.0), hit-conditional breakpoints (1.26.1), read (1.26.0) and write (1.27.0) memory handlers, examinemem in the debug console (1.26.2).
+:
+: If someone in the room lives in VS Code, the data-breakpoint news is the one they'll care about — watchpoints used to be a reason to drop to the CLI.
 
 ## The goroutine leak profile
 
