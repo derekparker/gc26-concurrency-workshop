@@ -1,19 +1,17 @@
 # Bonus Finale: An AI Agent Holds the Debugger
 
-> **Instructor-led, if time allows. Time: ~15–20 minutes.**
->
-> This is the payoff of the framing we opened the section with: agents can
-> drive Delve too. Students connect Delve's MCP bridge to a coding agent
-> and watch the agent debug a live deadlock, set up a session, walk the
-> goroutines, read the channels, explain the cycle, using the exact
-> evidence-gathering moves *they* just practiced by hand.
->
-> **There is no new program in this exercise.** The debuggee is
-> [`ex2-dispatcher`](../ex2-dispatcher/), its deadlock is fully
-> deterministic, which is what makes this demo presenter-proof. Everything
-> below was captured for real with `mcp-dap-server` (installed 2026-07-15,
-> pseudo-version `v0.0.0-20260618220505`), Delve 1.27.0, Go 1.26, and
-> Claude Code 2.1.x.
+This is the payoff of the framing this workshop opened with: agents can
+drive Delve too. You'll connect Delve's MCP bridge to a coding agent and
+watch the agent debug a live deadlock, set up a session, walk the
+goroutines, read the channels, explain the cycle, using the exact
+evidence-gathering moves you just practiced by hand.
+
+**There is no new program in this exercise.** The debuggee is
+[`ex2-dispatcher`](../ex2-dispatcher/), whose deadlock is fully
+deterministic, so this exercise reproduces the same way every time.
+Everything below was captured for real with `mcp-dap-server` (installed
+2026-07-15, pseudo-version `v0.0.0-20260618220505`), Delve 1.27.0, Go
+1.26, and Claude Code 2.1.x.
 
 ## What This Is
 
@@ -43,10 +41,10 @@ context, evaluate, set-variable, info, disassemble
 `context` is the workhorse: location + full stack (with frame IDs) + all
 locals in one call. `info {"type": "threads"}` lists goroutines
 (DAP "threads" are goroutines under Delve). `evaluate` takes an optional
-`frameId` so expressions run in a *user* frame, remember that; it's the
-demo's best teaching moment when the agent gets it wrong.
+`frameId` so expressions run in a *user* frame, remember that; it's this
+exercise's best teaching moment when the agent gets it wrong.
 
-## Setup (Do This Before the Session)
+## Setup
 
 ```bash
 # 1. The bridge (needs Go >= 1.26.1; the toolchain auto-download handles it)
@@ -62,13 +60,20 @@ claude mcp list        # should show: debugger ... - ✓ Connected
 
 Inside a Claude Code session, `/mcp` shows the server and its (initially
 one) tool. Note there are **no tagged releases yet**, `@latest` is a
-pseudo-version of `main`; re-run the `go install` the week of the
-workshop and re-verify the demo.
+pseudo-version of `main`, so behavior may drift slightly from what's
+documented here depending on when you install it.
 
-## The Live Demo, Scripted
+## Run the Demo
 
 Start Claude Code **in the ex2 directory** (so the agent's cwd is the
-module) and paste a prompt like:
+module):
+
+```bash
+cd 03-delve/exercises/ex2-dispatcher
+claude
+```
+
+Paste this prompt:
 
 > This Go program (main.go in the current directory) deadlocks every
 > run. Using only the debugger MCP tools, launch with the `debug` tool
@@ -80,9 +85,9 @@ module) and paste a prompt like:
 The two constraints are the whole trick: *"only the debugger tools"* and
 *"do not read any files"* force the agent to reason from the process, not
 pattern-match on source, the same discipline this section has been
-teaching humans.
+teaching you.
 
-What a correct run looks like (verified sequence; narrate each beat):
+What a correct run looks like (verified sequence; watch for each beat):
 
 **1. `debug`** `{mode: "source", path: ".../ex2-dispatcher", stopOnEntry: true}` →
 
@@ -136,36 +141,34 @@ Threads:
 
 Both buffers full, main wedged holding job 10, workers wedged holding
 their reports, the agent now has every fact it needs to write up the
-cycle from exercise 2, and a good one will do exactly that.
+cycle from exercise 2, and a good run will do exactly that.
 
-## What to Tell Students to Watch For
+## What to Watch For
 
 - **Which breakpoints it chooses**, or doesn't: does it realize the
   fatal error already stops the process, or does it waste turns setting
   breakpoints in the worker loop first?
 - **The goroutine sweep**, `info threads` then per-thread `context` is
-  the agent's version of your `goroutines -group userloc` + `stack`.
-  Count the tool calls it burns to get what one CLI command gave you.
+  the agent's version of `goroutines -group userloc` + `stack`. Count
+  the tool calls it burns to get what one CLI command gave you.
 - **The first `evaluate` failure.** At the exception stop the top frame
   is `runtime.gopark`, so a frame-less `evaluate {"expression": "jobs"}`
   returns `unable to evaluate expression`. Watch whether the agent
   diagnoses the scope problem and reaches for `frameId` on its own,
   this is the "does it actually understand the debugger?" moment.
 - **Evidence vs. vibes** in the final answer: does every claim trace to
-  a tool result? That transcript-as-proof is the section's closing theme.
+  a tool result? That transcript-as-proof is this section's closing theme.
 - Tool-permission prompts: approve the debugger tools on first use (or
-  pick "always allow") so the flow doesn't stall mid-demo.
+  pick "always allow") so the flow doesn't stall.
 
-## When It Goes Sideways (Live Recovery)
-
-All of these are recoverable without restarting the room:
+## Troubleshooting
 
 - **`debug` fails: `dlv` not found.** The server inherits the *agent's*
   PATH. Launch `claude` from a terminal where `dlv version` works, or
   re-add with an explicit env:
   `claude mcp add --scope user debugger -e PATH="$PATH" -- $(go env GOPATH)/bin/mcp-dap-server`.
 - **Endless `unable to evaluate expression`.** The agent is evaluating in
-  a runtime frame. Nudge: *"call context first and pass the frameId of a
+  a runtime frame. Nudge it: *"call context first and pass the frameId of a
   main.* frame to evaluate."*
 - **It set a breakpoint in the worker loop and keeps re-hitting it.**
   Nudge: *"clear all breakpoints (`{\"all\": true}`) and continue to the
@@ -176,22 +179,19 @@ All of these are recoverable without restarting the room:
   server, then re-prompt with "resume: launch the dispatcher again".
 - **It starts reading main.go.** Deny the permission prompt and let the
   denial do the teaching, the prompt said debugger only.
-- **Total meltdown.** Fall back to exercise 2 by hand: *"here's the same
-  investigation, four commands, eight seconds"*, which is honestly a
-  fine finale too.
 
 Housekeeping: source-mode sessions leave Delve's `__debug_bin*`
 binaries in the package directory when the session dies at the fatal
 error (observed with the current build). They're gitignored, and the
 repo's `cleanup.sh` sweeps them.
 
-Dry-run the full loop on the venue machine the morning of. `@latest`
-moves; this repo's transcript is your known-good baseline.
+`@latest` moves; if the agent's behavior drifts noticeably from what's
+documented here, that's likely why.
 
 ## Also Works Headless
 
-The same wiring runs non-interactively, CI for "can an agent triage our
-hung service?":
+The same wiring runs non-interactively, useful for "can an agent triage
+our hung service?":
 
 ```bash
 echo "This program deadlocks... (prompt as above)" | \
@@ -206,8 +206,7 @@ complete cycle, main parked on `jobs` (4/4) holding job 10, all three
 workers parked on `reports` (2/2) holding jobs 1/4/5, "the accounting
 closes exactly", plus the structural fix, and it even told the two
 channels apart by their lock addresses in the `gopark` frames, a trick
-nobody demonstrated for it. Keep a captured run in your back pocket: if
-the live demo misbehaves, show the transcript.
+nobody demonstrated for it.
 
 ## Discussion: Agent vs. Human at the Prompt
 

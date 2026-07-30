@@ -28,7 +28,7 @@ the one steering.
 | Time | What | Where |
 |------|------|-------|
 | 0:00–0:10 | Setup check + Delve crash course (below) | this README |
-| 0:10–0:40 | Instructor demo: pipeline deadlock | [`demo/`](demo/) |
+| 0:10–0:40 | Demo: pipeline deadlock | [`demo/`](demo/) |
 | 0:40–1:00 | Exercise 1: the silent stall (+ Go 1.26 leak-profile stretch) | [`exercises/ex1-fanout-fanin/`](exercises/ex1-fanout-fanin/) |
 | 1:00–1:15 | Exercise 2: channel forensics | [`exercises/ex2-dispatcher/`](exercises/ex2-dispatcher/) |
 | 1:15–1:30 | Exercise 3: watchpoint stakeout (stretch/take-home if short) | [`exercises/ex3-inventory/`](exercises/ex3-inventory/) |
@@ -107,7 +107,7 @@ Worth demonstrating once each:
 
 ## What Each Piece Teaches
 
-- **`demo/`**, a pipeline deadlock, instructor-led: goroutine triage,
+- **`demo/`**, a pipeline deadlock, guided walkthrough: goroutine triage,
   the `-chan` filter, channel internals, root-causing a missing receiver,
   plus conditional breakpoints, tracepoints, `dlv trace`, and `dump`.
 - **`ex1-fanout-fanin/`**, a fan-out/fan-in pipeline that stalls

@@ -34,7 +34,7 @@ an agent to reason from, instead of letting it guess.
 ## Schedule (~90 minutes)
 | Part | Time | What |
 |------|------|------|
-| [demo/](demo/) | ~25 min | Presenter-led tour of `go tool trace` + tasks/regions/logs |
+| [demo/](demo/) | ~25 min | Guided tour of `go tool trace` + tasks/regions/logs |
 | [exercises/ex1-scheduling](exercises/ex1-scheduling/) | ~20 min | Scheduler starvation: tail latency from too many runnable goroutines |
 | [exercises/ex2-flightrecorder](exercises/ex2-flightrecorder/) | ~25 min | Flight recorder: catch a rare latency spike in a long-running service |
 | [exercises/ex3-io](exercises/ex3-io/) | ~20 min | Hidden serialization: a "parallel" pipeline that runs one record at a time |

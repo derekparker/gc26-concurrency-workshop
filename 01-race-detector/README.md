@@ -4,7 +4,7 @@
 
 This section teaches Go's built-in data race detector: what a data race
 actually is, how to read a race report, and how to choose the right fix
-(mutex, RWMutex, atomic, or channel). You'll follow an instructor-led demo,
+(mutex, RWMutex, atomic, or channel). You'll start with a guided demo,
 then debug three progressively sneakier buggy programs yourself, plus a
 bonus lab on catching races in *tests* with `go test -race` and
 `testing/synctest`.
@@ -27,7 +27,7 @@ skill that compounds.
 
 | Time | Activity |
 |------|----------|
-| 0:00–0:20 | Instructor demo: [`demo/`](demo/), counter race, reading the report, three fixes |
+| 0:00–0:20 | Demo: [`demo/`](demo/), counter race, reading the report, three fixes |
 | 0:20–0:30 | [Exercise 1: Stats Tracker](exercises/ex1-counter/), invisible counter races |
 | 0:30–0:45 | [Exercise 2: Cache & Metrics](exercises/ex2-map/), flaky map crashes |
 | 0:45–0:58 | [Exercise 3: Banking](exercises/ex3-banking/), "looks synchronized but isn't" |

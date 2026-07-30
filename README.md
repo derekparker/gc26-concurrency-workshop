@@ -30,7 +30,7 @@ Mastering these tools is how you stay the engineer who can say *what the program
 
 Each part contains:
 
-- `demo/`, the instructor-led walkthrough you follow along with
+- `demo/`, a guided walkthrough you work through yourself
 - `exercises/`, buggy programs **you** debug yourself using the tool just covered
 
 ## Prerequisites
