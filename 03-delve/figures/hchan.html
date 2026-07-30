@@ -1,0 +1,63 @@
+<!--
+  What `print jobs` is actually showing you. Values are the verified transcript
+  from exercises/ex2-dispatcher/README.md: qcount 4, dataqsiz 4, buffer holding
+  jobs 6-9, empty recvq, main parked in sendq holding job 10.
+-->
+<div class="fig">
+  <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:19px;
+              font-weight:700;margin-bottom:14px">
+    chan main.Job &nbsp;&nbsp;&mdash;&nbsp;&nbsp;
+    <span style="color:#a06000">qcount: 4</span> &nbsp;&nbsp;
+    <span style="color:#a06000">dataqsiz: 4</span>
+  </div>
+
+  <div style="font-size:13px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+              color:#a06000;margin-bottom:6px">buf &mdash; ring buffer, full</div>
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:20px">
+    <div style="flex:1;border:2px solid #a06000;border-radius:5px;padding:9px;text-align:center;background:#fff">
+      <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:17px;font-weight:700">ID: 8</div>
+      <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:12px;color:#5c6b7a">pkg/service08</div>
+    </div>
+    <div style="flex:1;border:2px solid #a06000;border-radius:5px;padding:9px;text-align:center;background:#fff">
+      <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:17px;font-weight:700">ID: 9</div>
+      <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:12px;color:#5c6b7a">pkg/service09</div>
+    </div>
+    <div style="flex:1;border:2px solid #a06000;border-radius:5px;padding:9px;text-align:center;background:#fff">
+      <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:17px;font-weight:700">ID: 6</div>
+      <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:12px;color:#5c6b7a">pkg/service06</div>
+    </div>
+    <div style="flex:1;border:2px solid #a06000;border-radius:5px;padding:9px;text-align:center;background:#fff">
+      <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:17px;font-weight:700">ID: 7</div>
+      <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:12px;color:#5c6b7a">pkg/service07</div>
+    </div>
+    <div style="flex:0 0 165px;font-size:15px;font-weight:700;color:#a06000">
+      4 of 4 &mdash; no room left
+    </div>
+  </div>
+
+  <div style="display:flex;gap:18px">
+    <div style="flex:1;border:1px solid #d3dae1;border-left:4px solid #c62828;
+                border-radius:5px;padding:13px 15px;background:#fff">
+      <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:16px;
+                  font-weight:700;margin-bottom:9px">recvq &mdash; who wants a job?</div>
+      <div style="background:#16202b;color:#ff8f8f;border-radius:4px;padding:9px 12px;
+                  font-family:'Droid Sans Mono','Courier New',monospace;font-size:15px;
+                  font-weight:700;text-align:center">first: nil &nbsp;&nbsp;(empty)</div>
+      <p style="margin:9px 0 0;font-size:15px;color:#c62828;font-weight:700">
+        Nobody is receiving. That is the bug.</p>
+    </div>
+    <div style="flex:1;border:1px solid #d3dae1;border-left:4px solid #00728f;
+                border-radius:5px;padding:13px 15px;background:#fff">
+      <div style="font-family:'Droid Sans Mono','Courier New',monospace;font-size:16px;
+                  font-weight:700;margin-bottom:9px">sendq &mdash; who is stuck sending?</div>
+      <div style="background:#16202b;color:#4fd3f5;border-radius:4px;padding:9px 12px;
+                  font-family:'Droid Sans Mono','Courier New',monospace;font-size:14px">
+        Goroutine 1 &mdash; main.main [chan send]</div>
+      <p style="margin:9px 0 0;font-size:15px;color:#5c6b7a">
+        <code>main</code> is parked here, still holding job&nbsp;10.</p>
+    </div>
+  </div>
+
+  <p class="note"><strong>A deadlock is always a cycle.</strong> Full buffer, empty
+     <code>recvq</code>, loaded <code>sendq</code> &mdash; these four numbers hand you every edge.</p>
+</div>

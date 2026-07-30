@@ -1,0 +1,318 @@
+# Debugging Go Concurrency with Delve
+Part III of Go Concurrency: Debugging Goroutines and Channels
+
+Derek Parker
+GopherCon 2026
+
+: Present with: present -notes -play=false   (from the repo root), then press N for this notes window.
+: This deck mirrors 03-delve/README.md, which remains the source of truth.
+: ~90 min core + optional finale. In the recommended cut this runs in 60: demo + ex1 + ex2, with ex3-inventory as take-home.
+: Day-before: dlv version >= 1.27.0, and go install github.com/go-delve/mcp-dap-server@latest for the finale.
+
+## Where we are
+
+.html ../slides-common/figures.html
+.html figures/three-lenses.html
+
+: The race detector told you THAT memory was racy. The execution tracer told you WHAT happened over time. Delve answers the question the other two can't: what is true about this program right now?
+
+## What a debugger gives you that the others can't
+
+Which goroutines exist. What each one is blocked on. What's inside that
+channel. Who holds that lock. Who wrote that value.
+
+**Queryable. Live. On a frozen process.**
+
+: The key word is *queryable*. A trace is a recording you scrub through; a debugger is a database you interrogate.
+:
+: This part covers the workflows that matter for concurrency bugs: goroutine triage at scale, channel forensics, watchpoints, and debugging processes you can't restart — live (attach) or dead (core dumps).
+
+## A 2026 note worth saying out loud
+
+As AI tools write a growing share of our code, engineers spend a growing share
+of their time debugging code they didn't write.
+
+- A debugger is the fastest way to build ground truth about unfamiliar code.
+  You don't have to *understand* 400 goroutines to ask Delve which six places
+  they're stuck in.
+- It cuts both ways: agents can drive Delve too, over headless RPC or DAP.
+- A debugger transcript — "these goroutines, parked on this channel, holding
+  these values" — is exactly the high-signal evidence that keeps an AI
+  assistant fixing the real bug instead of guessing.
+
+The engineer who can produce that evidence stays the one steering.
+
+: This is the framing that the finale cashes in, 20 minutes from now. Don't oversell it here — just plant it.
+
+## This session
+
+.html figures/schedule.html
+
+: The "Beyond the terminal" material later in this deck — attach, cores, scripting, editors, agents — is designed to be woven into the demo and wrap-up rather than presented as its own block.
+
+## Setup
+
+Delve **1.26.0 or newer** is required for Go 1.26 support. This material was
+verified with Delve 1.27.0 on Go 1.26.
+
+	go install github.com/go-delve/delve/cmd/dlv@latest
+	dlv version
+
+Three ways to start a session, all used in this part:
+
+	dlv debug            # compile current package with -N -l and debug it
+	dlv exec ./binary    # debug a prebuilt binary
+	dlv attach <pid>     # debug an already-running process
+
+: Verify your setup now: cd 03-delve/demo && go build ./... && dlv version
+
+## Keep your variables inspectable
+
+For binaries you build yourself:
+
+	go build -gcflags='all=-N -l' -o program .
+
+`-N` disables optimizations, `-l` disables inlining — which is exactly what
+`dlv debug` does for you.
+
+Without these, half your locals are "optimized out" and you'll blame the
+debugger.
+
+: Worth 30 seconds. It's the single most common reason someone concludes "Delve doesn't work".
+
+## The five commands that solve most concurrency bugs
+
+.html figures/five-commands.html
+
+: This is the ten-minute crash course. Drill these five, live at the prompt, before the demo.
+:
+: Everything else in Delve is a normal debugger. These five are what make it a *Go* debugger.
+
+## Triage by wait reason, before reading any code
+
+`goroutines` output ends in a wait reason:
+
+	[chan send]   [chan receive]   [sync.Mutex.Lock]
+	[select]      [sleep]          [IO wait]
+
+Read the reasons first. The distribution tells you the shape of the bug before
+you open a single file.
+
+: Habit to instill: don't open the source until the wait reasons have told you where to look. Eight goroutines in sync.Mutex.Lock is a very different bug from eight in chan send.
+
+## 400 goroutines, six lines
+
+.html figures/grouping.html
+
+: This is the single highest-value command for concurrency debugging.
+:
+: Story in that output: workers wedged on a mutex, so no results; collector starves; workers never return, so wg.Wait never returns, so results never closes. One cause, four symptoms.
+:
+: A Go sync.Mutex doesn't record its owner — so find the holder the honest way: look at the stacks of the waiters. Seven will look identical and one will be different.
+
+## Filtering and grouping is a query language
+
+	goroutines -with user
+	goroutines -with/-without (userloc|curloc|goloc|startloc) <substr>
+	goroutines -group (userloc|label <key>)
+	goroutines -with label key=value
+	goroutines -exec <cmd>        # run a command on every match
+
+If your services set pprof labels via `pprof.Do`, Delve turns them into a
+query language for goroutines.
+
+: The label point is the one that lands with people running real services. If you already label by request ID or job type, you can slice a frozen process by those labels.
+:
+: In the demo: goroutines -group label job shows job=processor/receiver/validator — and no job=shipper. Ask the room what's missing. The shipper is *gone*.
+
+## Context switching
+
+	goroutine 7            # make goroutine 7 current
+	goroutine 7 stack      # peek without switching
+
+Once switched, `bt`, `frame 3`, `locals`, and `print` all follow.
+
+: The distinction matters when you're sweeping: `goroutine <id> stack` lets you look at twenty goroutines without losing your place.
+
+## Panics and fatal errors are breakpoints
+
+Delve pre-installs `unrecovered-panic` and `runtime-fatal-throw`.
+
+So this:
+
+	fatal error: all goroutines are asleep - deadlock!
+
+&hellip; leaves you at a prompt with the corpse still warm.
+
+For hangs the runtime *doesn't* detect: `Ctrl+C` freezes the process at a prompt.
+
+: This is the "oh!" moment for a lot of people. They've seen that fatal error a hundred times and always treated it as the end of the story rather than the beginning.
+:
+: Exercise 1 is exactly the second case — a silent stall the runtime never detects.
+
+## Two more things worth knowing
+
+**Stepping is goroutine-pinned.** Breakpoints stop the world, but `next` and
+`step` stay on *your* goroutine rather than bouncing to whichever goroutine
+runs next.
+
+**Breakpoints that do things:**
+
+	condition <bp> <expr>        # only stop when it matters
+	on <bp> <command>            # run a command at the stop
+	trace <locspec>              # notify, don't stop
+	display -a <expr>            # re-print on every stop
+	watch -w <expr>              # hardware watchpoint: break on DATA, not code
+
+: The watchpoint is the setup for exercise 3 — break on data, not code. It's the only way to catch a wrong-value bug where every access is properly locked.
+
+## Channel forensics
+
+.html figures/hchan.html
+
+: Vocabulary for the room: qcount/dataqsiz = items buffered vs capacity; sendq/recvq = queues of goroutines parked on send/receive (a sudog is the runtime's record of "goroutine waiting on a synchronization object"); closed is 0 or 1.
+:
+: The buffer isn't opaque — `print jobs.buf` shows real values. In a real system that's how you learn *which* work is stuck, not just how much.
+:
+: Delve also summarizes the waiters underneath the struct, so you don't have to chase sudog pointers.
+
+## What each piece teaches
+
+- **`demo/`** — a pipeline deadlock, instructor-led: goroutine triage, the
+  `-chan` filter, channel internals, root-causing a missing receiver, plus
+  conditional breakpoints, tracepoints, `dlv trace`, and `dump`.
+- **`ex1-fanout-fanin/`** — a pipeline that stalls *silently*; the runtime
+  deadlock detector never fires. Attach or interrupt, group by location, find
+  the one goroutine that's different.
+- **`ex2-dispatcher/`** — a dispatch/collect deadlock, solved almost entirely by
+  reading `print <chan>` output.
+- **`ex3-inventory/`** — mutex-protected, race-detector-clean, wrong-*value*.
+  A watchpoint catches the culprit mid-write. The most "only a debugger finds
+  this" of the three.
+
+: ex2-dispatcher always dies dispatching job 10 — these deadlocks wedge the same way every run. If something behaves oddly, git checkout -- <dir> and rerun.
+
+## Beyond the terminal: debugging a live process
+
+	dlv attach $(pgrep myservice)
+	(dlv) goroutines -group userloc
+
+The process is only paused while you sit at the prompt. `quit` asks whether to
+kill it — answer **n** to detach and let it keep running.
+
+This is the move when a service is wedged *right now* and a restart would
+destroy the evidence.
+
+: On Linux boxes you may need sysctl kernel.yama.ptrace_scope=0 or root. On macOS, Delve's installed debugserver handles the signing dance.
+
+## Post-mortem: core dumps
+
+Deadlocked service, can't keep it paused? Freeze-dry it.
+
+	# Option A — from a live Delve session, any platform:
+	(dlv) dump ./service.core
+
+	# Option B — on Linux, make fatal errors leave a core behind:
+	ulimit -c unlimited
+	GOTRACEBACK=crash ./service
+
+	# Either way, debug the corpse later, anywhere with the same binary:
+	dlv core ./service ./service.core
+	(dlv) goroutines -with user
+
+: dlv core reads Linux ELF cores, Windows minidumps, and Delve dump files. Everything read-only works: goroutines, stacks, print, -chan. You obviously can't continue.
+:
+: Great for CI: capture cores from hung integration tests and debug them after the fact.
+
+## Scripting Delve
+
+Non-interactive sessions for repeatable investigations — and for agents:
+
+	# run a canned command list
+	dlv exec ./service --init deadlock.dlv
+
+	# lightweight function tracing: args, returns, timestamps, no code changes
+	dlv trace --timestamp 'SendOrder|Checkout'
+
+Delve also embeds Starlark (`source script.star`) for programmatic sessions —
+e.g. iterate all goroutines and dump selected frame variables.
+
+: dlv trace is underrated: it's printf debugging without editing or rebuilding the program.
+
+## Editors and DAP
+
+`dlv dap` speaks the Debug Adapter Protocol. VS Code's Go extension, GoLand, and
+Neovim (nvim-dap) all sit on top of it.
+
+Same engine — so everything in this section exists there too:
+
+- VS Code's **CALL STACK** view is `goroutines`
+- conditional breakpoints are a right-click away
+- the **DEBUG CONSOLE** accepts `dlv` expressions
+
+Use the GUI day to day if you like. But the CLI is what you have over SSH on the
+box where prod is burning — and it's what scripts and agents can drive.
+
+: Recent Delve releases keep improving DAP: multi-process follow-exec targets, suspended breakpoints.
+
+## Go 1.26's goroutine leak profile (experimental)
+
+A pprof profile reporting only goroutines the GC can **prove** will never wake up.
+
+	GOEXPERIMENT=goroutineleakprofile go build
+	# then: runtime/pprof.Lookup("goroutineleak")
+	#   or: /debug/pprof/goroutineleak
+
+The fleet-scale complement to this section: the profile tells you **that**
+goroutines leaked and where they're parked. Delve tells you **why**.
+
+: Caveats worth saying out loud: experimental and build-time gated (without the GOEXPERIMENT build the endpoint 404s); detection is conservative, so absence of proof isn't proof of absence; and requesting the profile triggers a full GC cycle that performs the analysis — fine on demand or in CI, don't scrape it every second.
+:
+: Plan of record is on-by-default in Go 1.27. Exercise 1's stretch goal runs it against the silent stall, with real output.
+
+## AI agents can hold the debugger too
+
+	dlv debug --headless --listen=127.0.0.1:2345 --accept-multiclient
+	dlv connect 127.0.0.1:2345    # a human... or not
+
+Headless Delve exposes the full JSON-RPC API; `dlv dap` exposes the DAP one. The
+Delve project ships an MCP bridge, `go-delve/mcp-dap-server`, that lets coding
+agents set breakpoints and walk goroutine dumps through those same protocols.
+
+An agent that can walk a frozen process reasons from evidence. An agent that
+can't is pattern-matching on your source.
+
+Either way, *someone* has to know what a `sendq` full of parked goroutines
+means. That's you.
+
+: That last line is the closing note of the whole workshop. Land it.
+:
+: The finale (ex4-agent) wires this into Claude Code and lets an agent debug exercise 2's deadlock in front of the room: launch, goroutine sweep, frame-targeted evaluation, written verdict.
+:
+: Failure modes are scripted in the ex4-agent README — server needs dlv on PATH; tools appear only after a session starts; evaluate needs a frame at the fatal-error stop. If the agent flails, the fallback is doing the same investigation by hand, which is itself the discussion point.
+
+## Wrap-up: when to reach for Delve
+
+- **When the program is stuck right now** and you need to know why, not guess.
+- **When a restart would destroy the evidence** — `dlv attach`, or `dump` a core.
+- **When the value is wrong but every access is locked** — watchpoints.
+- **When you're debugging code you didn't write** — triage 400 goroutines
+  without reading 400 goroutines.
+
+What it *can't* tell you: whether an access was racy without a race (Part I),
+or where the time went across a whole run (Part II).
+
+Three tools. Three kinds of ground truth. Use all three.
+
+: Close the arc explicitly — this is the last section, so the callback to Parts I and II is the whole point.
+:
+: Then: what to run in CI tomorrow. -race in CI, flight recorder in prod, dlv attach in your pocket.
+
+## Further reading
+
+.link https://github.com/go-delve/delve/blob/master/Documentation/cli/README.md Delve CLI command reference
+.link https://github.com/go-delve/delve/tree/master/Documentation Delve documentation tree
+.link https://github.com/go-delve/mcp-dap-server go-delve/mcp-dap-server — the MCP/DAP bridge
+.link https://go.dev/doc/go1.26 Go 1.26 release notes — the goroutineleak profile
+
+: The goroutines command deep dive (filtering, grouping, -chan, -exec) is in the CLI reference, linked first.

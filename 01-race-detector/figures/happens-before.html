@@ -1,0 +1,87 @@
+<!--
+  Why -race reports races whose accesses never physically collided.
+  Self-contained SVG: present's slide CSS does not style SVG.
+-->
+<div class="fig">
+<svg viewBox="0 0 1000 320" width="100%" role="img"
+     aria-label="Two goroutine timelines: without a happens-before edge the accesses race; a mutex unlock/lock pair orders them.">
+  <defs>
+    <marker id="hb-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e7a46"/>
+    </marker>
+  </defs>
+
+  <!-- ============ left: no ordering ============ -->
+  <rect x="10" y="10" width="470" height="300" rx="6" fill="#ffffff" stroke="#d3dae1"/>
+  <rect x="10" y="10" width="5" height="300" fill="#c62828"/>
+  <text x="34" y="44" font-family="'Open Sans',Arial,sans-serif" font-size="17"
+        font-weight="700" fill="#c62828">No happens-before edge &#8594; DATA RACE</text>
+
+  <text x="34" y="111" font-family="'Droid Sans Mono','Courier New',monospace"
+        font-size="14" fill="#5c6b7a">G1</text>
+  <line x1="72" y1="105" x2="462" y2="105" stroke="#d3dae1" stroke-width="2"/>
+  <text x="34" y="201" font-family="'Droid Sans Mono','Courier New',monospace"
+        font-size="14" fill="#5c6b7a">G2</text>
+  <line x1="72" y1="195" x2="462" y2="195" stroke="#d3dae1" stroke-width="2"/>
+
+  <rect x="95" y="88" width="125" height="34" rx="4" fill="#00728f"/>
+  <text x="157" y="110" text-anchor="middle" font-family="'Droid Sans Mono','Courier New',monospace"
+        font-size="13" fill="#ffffff">write x = 1</text>
+
+  <rect x="300" y="178" width="95" height="34" rx="4" fill="#00728f"/>
+  <text x="347" y="200" text-anchor="middle" font-family="'Droid Sans Mono','Courier New',monospace"
+        font-size="13" fill="#ffffff">read x</text>
+
+  <line x1="157" y1="124" x2="347" y2="176" stroke="#c62828" stroke-width="2"
+        stroke-dasharray="6 5"/>
+  <text x="203" y="172" font-family="'Open Sans',Arial,sans-serif" font-size="13"
+        font-weight="700" fill="#c62828">no ordering</text>
+
+  <text x="34" y="262" font-family="'Open Sans',Arial,sans-serif" font-size="13" fill="#5c6b7a">
+    Reported even though the two accesses never
+  </text>
+  <text x="34" y="281" font-family="'Open Sans',Arial,sans-serif" font-size="13" fill="#5c6b7a">
+    overlapped on this run. Vector clocks, not luck.
+  </text>
+
+  <!-- ============ right: ordered by a mutex ============ -->
+  <rect x="520" y="10" width="470" height="300" rx="6" fill="#ffffff" stroke="#d3dae1"/>
+  <rect x="520" y="10" width="5" height="300" fill="#1e7a46"/>
+  <text x="544" y="44" font-family="'Open Sans',Arial,sans-serif" font-size="17"
+        font-weight="700" fill="#1e7a46">Unlock &#8594; Lock &#8594; ordered, safe</text>
+
+  <text x="544" y="111" font-family="'Droid Sans Mono','Courier New',monospace"
+        font-size="14" fill="#5c6b7a">G1</text>
+  <line x1="582" y1="105" x2="972" y2="105" stroke="#d3dae1" stroke-width="2"/>
+  <text x="544" y="201" font-family="'Droid Sans Mono','Courier New',monospace"
+        font-size="14" fill="#5c6b7a">G2</text>
+  <line x1="582" y1="195" x2="972" y2="195" stroke="#d3dae1" stroke-width="2"/>
+
+  <rect x="595" y="88" width="120" height="34" rx="4" fill="#00728f"/>
+  <text x="655" y="110" text-anchor="middle" font-family="'Droid Sans Mono','Courier New',monospace"
+        font-size="13" fill="#ffffff">write x = 1</text>
+  <rect x="727" y="88" width="88" height="34" rx="4" fill="#1e7a46"/>
+  <text x="771" y="110" text-anchor="middle" font-family="'Droid Sans Mono','Courier New',monospace"
+        font-size="13" fill="#ffffff">Unlock</text>
+
+  <rect x="790" y="178" width="72" height="34" rx="4" fill="#1e7a46"/>
+  <text x="826" y="200" text-anchor="middle" font-family="'Droid Sans Mono','Courier New',monospace"
+        font-size="13" fill="#ffffff">Lock</text>
+  <rect x="874" y="178" width="90" height="34" rx="4" fill="#00728f"/>
+  <text x="919" y="200" text-anchor="middle" font-family="'Droid Sans Mono','Courier New',monospace"
+        font-size="13" fill="#ffffff">read x</text>
+
+  <line x1="775" y1="124" x2="822" y2="174" stroke="#1e7a46" stroke-width="2.5"
+        marker-end="url(#hb-arrow)"/>
+  <text x="600" y="160" font-family="'Open Sans',Arial,sans-serif" font-size="13"
+        font-weight="700" fill="#1e7a46">happens-before edge</text>
+
+  <text x="544" y="262" font-family="'Open Sans',Arial,sans-serif" font-size="13" fill="#5c6b7a">
+    The edge orders every earlier G1 access before
+  </text>
+  <text x="544" y="281" font-family="'Open Sans',Arial,sans-serif" font-size="13" fill="#5c6b7a">
+    every later G2 access. No report.
+  </text>
+</svg>
+</div>

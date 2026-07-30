@@ -1,0 +1,26 @@
+<!-- sync.WaitGroup.Go, Go 1.25. -->
+<div class="fig">
+  <div class="compare">
+    <div class="before">
+      <div class="hdr">Before</div>
+<pre>wg.Add(1)
+go func() {
+    defer wg.Done()
+    work()
+}()
+
+wg.Wait()</pre>
+    </div>
+    <div class="after">
+      <div class="hdr">Go 1.25</div>
+<pre>wg.Go(func() {
+    work()
+})
+
+
+
+wg.Wait()</pre>
+    </div>
+  </div>
+  <p class="note">Fewer places to forget a <code>Done()</code> and hang forever.</p>
+</div>

@@ -1,0 +1,36 @@
+<!-- The one table to internalize. From 02-execution-tracer/README.md. -->
+<div class="fig">
+  <table class="grid">
+    <tr>
+      <th style="width:190px">State</th>
+      <th>Meaning</th>
+      <th style="width:330px">If you see a lot of it</th>
+    </tr>
+    <tr>
+      <td><span class="pill green">Running</span></td>
+      <td>executing on a P</td>
+      <td style="color:#1e7a46">fine &mdash; this is the goal</td>
+    </tr>
+    <tr class="hot">
+      <td><span class="pill red">Runnable</span></td>
+      <td>ready to run, waiting for a P</td>
+      <td><strong style="color:#c62828">scheduler starvation</strong> &nbsp;(ex1)<br>
+          <span style="font-size:14px;color:#5c6b7a">the most underrated state in the viewer</span></td>
+    </tr>
+    <tr>
+      <td><span class="pill amber">Blocked</span></td>
+      <td>parked on a channel, lock, or select</td>
+      <td style="color:#a06000">contention or serialization &nbsp;(ex2, ex3)</td>
+    </tr>
+    <tr>
+      <td><span class="pill purple">Net / syscall</span></td>
+      <td>parked in the netpoller or a syscall</td>
+      <td style="color:#6b46c1">slow I/O &mdash; or normal, if it&rsquo;s supposed to wait</td>
+    </tr>
+    <tr>
+      <td><span class="pill grey">GC / STW</span></td>
+      <td>garbage collector activity</td>
+      <td style="color:#5c6b7a">allocation pressure &mdash; check the Heap row</td>
+    </tr>
+  </table>
+</div>

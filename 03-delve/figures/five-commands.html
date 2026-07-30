@@ -1,0 +1,11 @@
+<!-- The five commands that solve most concurrency bugs. -->
+<div class="fig">
+<div class="term" style="font-size:18px"><span class="prompt">goroutines -with user</span>            <span class="dim">every user goroutine + its wait reason</span>
+<span class="prompt">goroutines -group userloc</span>        <span class="dim">400 goroutines -&gt; 6 lines with counts</span>
+<span class="prompt">goroutines -chan &lt;expr&gt;</span>          <span class="dim">who is parked on THIS channel?</span>
+<span class="prompt">goroutine &lt;id&gt; stack</span>             <span class="dim">stack of any goroutine, no switching</span>
+<span class="prompt">print &lt;ch&gt;</span>                       <span class="dim">channel internals: buffer, sendq, recvq</span></div>
+  <p class="note">Assume the room knows <code>break</code>, <code>continue</code>,
+     <code>next</code>, <code>print</code> from <em>any</em> debugger. Spend the ten
+     minutes on what&rsquo;s Go-specific.</p>
+</div>

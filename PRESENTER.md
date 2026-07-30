@@ -4,6 +4,10 @@ Everything here is for the presenter; students never need this file. Each
 section README is the teaching script, this page is the map of the whole
 4 hours, the timing pressure valves, and the day-before checklist.
 
+To project the material rather than read from the READMEs, run `./slides.sh`,
+there is a `.slide` deck per section with the README prose in its speaker
+notes (press `N`). See [SLIDES.md](SLIDES.md).
+
 ## The Arc
 
 Three tools, three lenses on the same theme, *what did the program actually
@@ -60,6 +64,9 @@ in Part I (15–20 min, fully scripted).
 ## Day-Before Checklist
 
 - [ ] `./setup.sh` passes on the presenting machine (Go 1.26+, Delve ≥ 1.27.0).
+- [ ] `./scripts/check_slides.sh` passes, then `./slides.sh` and press `N` once
+      to confirm the notes window opens (pop-ups must be allowed for
+      `127.0.0.1:3999`).
 - [ ] `./scripts/exercise_checker.sh`, expect the four Part I ❌ rows
       (exercises ship unsolved) and ✅ everywhere else.
 - [ ] Regenerate presenter traces: `*.trace` is gitignored, so a fresh clone

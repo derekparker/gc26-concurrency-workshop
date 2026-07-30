@@ -1,0 +1,283 @@
+# Finding Data Races with -race
+Part I of Go Concurrency: Debugging Goroutines and Channels
+
+Derek Parker
+GopherCon 2026
+
+: Present with: present -notes -play=false   (from the repo root), then press N for this notes window.
+: This deck mirrors 01-race-detector/README.md, which remains the source of truth. Notes here are the teaching script.
+: Section core is 58 minutes. ex4-testing is homework by default; run it live only if you're ahead.
+
+## Three tools, one question
+
+.html ../slides-common/figures.html
+.html figures/three-lenses.html
+
+: The arc of the whole day. Three tools, three lenses on the same theme: what did the program actually do?
+:
+: 1. Race detector: ground truth about memory access ordering.
+: 2. Execution tracer: ground truth about scheduling and time.
+: 3. Delve: ground truth about program state, on demand.
+:
+: Keep this short — three sentences, not a lecture. The AI finale at the end of the day proves the point; don't oversell it here.
+
+## What a data race actually is
+
+Two goroutines accessing **the same memory location** at the same time,
+
+where **at least one access is a write**,
+
+with **no synchronization** ordering the accesses.
+
+: Say the definition slowly. Every clause matters: two goroutines, same location, at least one write, no ordering.
+:
+: Everything else this hour follows from this definition.
+
+## Why races are the worst kind of bug
+
+- The classic "works on my machine" bug — the program may look correct for
+  months, then corrupt data under production load.
+- Nondeterministic by construction: whether it manifests depends on the
+  schedule, the machine, the load.
+- The detector turns that guesswork into a precise report with two stack
+  traces.
+
+: Races are the classic 'works on my machine' bug. The race detector turns guesswork into a precise report with two stack traces.
+:
+: Ask the room: who has shipped a race? Who found out from a customer?
+
+## One more reason this matters in 2026
+
+As AI agents write more of our code, engineers spend less time writing and more
+time reviewing and debugging code they didn't write.
+
+- A race report is **ground truth** — not an inference from reading source, by
+  you *or* by an AI.
+- Paste one into your AI assistant and it fixes the real bug. An agent with a
+  race report fixes the real bug; an agent without one guesses.
+- Mastering the tools that produce that evidence is the skill that compounds.
+
+: Three sentences, not a lecture. This is the framing that bookends the day and gets cashed in by the two AI beats in the finale.
+
+## This hour
+
+.html figures/schedule.html
+
+: Timing: ex1 ~10 min, ex2 ~15 min, ex3 ~13 min. ex4-testing is homework by default.
+:
+: Pressure valve if you're running long: ex3 can be shortened by walking the solution rather than letting the room finish it.
+
+## Using the detector
+
+Add `-race` to any build-style command:
+
+	go run   -race .
+	go test  -race ./...
+	go build -race .     # instrumented binary for staging/canary
+
+That's the whole interface. The skill is in reading what comes back.
+
+: Emphasize go build -race — people forget you can ship an instrumented binary to a canary or staging replica and catch races under real traffic.
+
+## The demo program
+
+.code demo/counter.go /^type incrementor/,/^}/
+
+.code demo/counter.go /^func \(inc \*incrementor\) increment/,/^}/
+
+: This is 01-race-detector/demo/counter.go, unmodified. Two goroutines call increment concurrently.
+:
+: Run it without -race first: the count is wrong, but nothing complains. Then run it with -race.
+:
+: Demo diffs apply in sequence from the repo root: mutex.diff, trace.diff, fix-mutex.diff, atomic.diff. Reset with: git checkout -- 01-race-detector/demo/counter.go
+
+## How it works — the 2-minute version
+
+- Built on **ThreadSanitizer**. Every memory access and every synchronization
+  operation is instrumented.
+- Every sync op is a clock tick: mutex lock/unlock, channel send/receive,
+  `WaitGroup.Wait`, atomics, goroutine start.
+- Using **vector clocks**, the runtime tracks the **happens-before** relation
+  defined by the [Go memory model](https://go.dev/ref/mem).
+- If two conflicting accesses are not ordered by happens-before, that's a data
+  race — *even if the accesses didn't physically collide on this run.*
+
+: That last clause is the one that surprises people. Don't skip it — it sets up the next slide, and it's why the detector is so much better than 'run it a thousand times and hope'.
+
+## Why it reports races you never saw happen
+
+.html figures/happens-before.html
+
+: The detector isn't watching for two accesses to physically overlap in time. It's asking whether anything in the memory model ordered them.
+:
+: No edge means race, even if this particular run happened to space the accesses a second apart.
+
+## No false positives
+
+If `-race` reports a race, **it is a real race.**
+
+Don't rationalize it away — "that's just a stats counter", "the window is tiny",
+"we've shipped it for years."
+
+The compiler and the CPU are allowed to miscompile racy code in surprising ways.
+
+: Be emphatic. The most common failure mode in the room is an engineer talking themselves out of a real report.
+:
+: There is no such thing as a benign data race in Go's memory model.
+
+## False negatives *are* possible
+
+The detector only sees code that actually **executes**, and only flags accesses
+that actually happen concurrently without ordering **during that run**.
+
+- An untested code path produces no report.
+- A schedule where the two goroutines never overlap produces no report.
+- Coverage depends on exercising realistic concurrent workloads.
+
+A green build is not proof of a race-free program.
+
+: This is the honest counterweight to the previous slide. Both matter: trust every report you get, but don't read silence as safety.
+
+## Anatomy of a race report
+
+.html figures/race-report.html
+
+: This is the core skill of this hour. Walk it top to bottom, live.
+:
+: 1. The two accesses. The first stack is the access that triggered the report; 'Previous write/read' is the earlier, conflicting access. At least one of the two is always a write. Same address, two goroutines, no ordering — that's the race.
+:
+: 2. Read vs write matters — next slide.
+:
+: 3. Goroutine creation sites tell you which go statement launched each party, often the fastest way to identify which worker or monitor is involved when both stacks look identical.
+
+## Read vs write matters
+
+- **Write / write** races corrupt data. Two goroutines write; the result can be
+  a value neither one ever wrote.
+- **Read / write** races return torn or stale values.
+- Multi-word values are the danger zone: `time.Time`, maps, slices, interfaces,
+  strings — all more than one word, all observable **half-written**.
+- A half-written interface is a crash: type word from one value, data word from
+  another.
+
+: The interface example usually gets a reaction. It explains panics that look impossible from reading the source — which is exactly the kind of bug people waste days on.
+
+## Fix the shared state, not each report
+
+One warning per racy **pair**.
+
+A single root cause — one unprotected struct — commonly produces many reports.
+
+Count the distinct addresses, not the distinct warnings.
+
+: Students in the exercises will see a wall of reports and start fixing line by line. Head that off now.
+
+## Cost and platform support
+
+.html figures/cost.html
+
+: Overhead is the reason people give for not running it. Give them the real numbers so they can make the real tradeoff.
+:
+: Status 66 is what fails your build — worth calling out explicitly.
+
+## Tuning with GORACE
+
+	GORACE="halt_on_error=1"          go run -race .        # stop at the first race
+	GORACE="log_path=/tmp/race"       go test -race ./...   # write reports to files
+	GORACE="strip_path_prefix=$PWD/"  go run -race .        # shorter paths in reports
+
+`halt_on_error=1` is what you want when one root cause is generating a flood.
+
+`strip_path_prefix` is what makes reports fit on a slide — and in a terminal.
+
+: By default the report goes to stderr and the program keeps running, which is why a single run can produce a wall of output.
+
+## Races in tests and CI
+
+- Run `go test -race ./...` in CI. **Non-negotiable** for concurrent code — the
+  cheapest place to catch a race, and the exit code fails the build.
+- The detector only finds races your tests *provoke*. Add tests that exercise
+  concurrency deliberately: multiple goroutines hammering the API.
+- `-race` lowers throughput. Set timeouts accordingly — a test that passes at
+  1× may time out at 10×.
+
+: This is the highest-leverage takeaway of the hour for most of the room: turn it on in CI today.
+
+## testing/synctest — stable since Go 1.25
+
+Runs a test in a **bubble** with a fake clock: concurrent tests become fast and
+deterministic.
+
+- The race detector understands synctest's synchronization, so `synctest` +
+  `-race` is a powerful combination for testing concurrent code.
+- A 2.4-second timing test runs in a bubble in ~0ms.
+
+The bonus lab, `exercises/ex4-testing/`, is a hands-on tour of both points: a
+green test suite hiding a race from CI, and that 2.4-second test rewritten.
+
+: Homework by default. If you're ahead of the clock this is fully scripted and runs in 15–20 minutes.
+
+## sync.WaitGroup.Go — Go 1.25
+
+Replaces the error-prone `Add`/`Done` dance. You'll see it in the demo.
+
+.html figures/waitgroup-go.html
+
+: Fewer places to forget a Done() and hang forever. Small quality-of-life change, but it removes an entire category of 'why is this test hanging' bugs.
+
+## What the race detector won't catch
+
+- Races on code paths that **never executed** during the run.
+- Races the schedule happened to order on this run — run tests repeatedly and
+  under load; `-count=` helps.
+- **Logical races** that aren't data races: check-then-act bugs where every
+  individual access is synchronized but the *sequence* isn't atomic.
+- **Deadlocks and goroutine leaks** — nothing is racing, nothing is moving.
+
+: The logical-race bullet is the bridge to exercise 3 (banking): race-detector-clean and still wrong. Set it up here so the exercise lands.
+:
+: The last bullet is the bridge to Parts II and III.
+
+## Choosing the fix
+
+.html figures/fix-menu.html
+
+: The demo walks counter.go through mutex.diff, trace.diff, fix-mutex.diff, atomic.diff in sequence.
+:
+: The point to land: atomic is not 'the fast mutex'. It's correct only when the whole invariant fits in one operation — which is exactly what exercise 3 violates.
+
+## Your turn
+
+- **Exercise 1 — Stats Tracker.** Invisible counter races. The report is clean
+  and the fix is short; start here to build the reading habit.
+- **Exercise 2 — Cache & Metrics.** Flaky map crashes. Concurrent map access,
+  the runtime's own fatal error, and why that isn't always a race report.
+- **Exercise 3 — Banking.** "Looks synchronized but isn't." Every access is
+  locked; the sequence still isn't atomic. The hardest of the three.
+
+: Every Part I race fires under -race on every run — these are deterministic. If something behaves oddly it's likely a stale edit: git checkout -- <dir> and rerun.
+:
+: Run ./scripts/exercise_checker.sh to validate. The four Part I rows ship as ❌ because the exercises ship unsolved.
+
+## Wrap-up: when to reach for -race
+
+- **Always in CI.** `go test -race ./...`
+- **On a canary.** `go build -race`, one instrumented replica under real traffic.
+- **First**, when you have a "works on my machine" bug — before you add a single
+  log line.
+
+What it *can't* tell you: untested paths, logical races, deadlocks, leaks, and
+where the time went.
+
+That's the next two hours.
+
+: Close on the shape every section wrap uses: when to reach for this tool, and what it can't tell you. Then break.
+
+## Further reading
+
+.link https://go.dev/doc/articles/race_detector Data Race Detector manual
+.link https://go.dev/ref/mem The Go Memory Model
+.link https://go.dev/blog/synctest Testing concurrent code with testing/synctest
+.link https://github.com/google/sanitizers/wiki/ThreadSanitizerAlgorithm ThreadSanitizer algorithm
+
+: All four are linked at the bottom of 01-race-detector/README.md as well.

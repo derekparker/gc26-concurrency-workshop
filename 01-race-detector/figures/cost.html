@@ -1,0 +1,36 @@
+<!-- Cost and configuration figures from 01-race-detector/README.md. -->
+<div class="fig">
+  <table class="grid">
+    <tr>
+      <th style="width:150px"></th>
+      <th>Detail</th>
+      <th style="width:290px">So&hellip;</th>
+    </tr>
+    <tr>
+      <td><span class="pill amber">Memory</span></td>
+      <td>typically <strong>5&ndash;10&times;</strong></td>
+      <td>fine for tests and CI</td>
+    </tr>
+    <tr>
+      <td><span class="pill amber">CPU</span></td>
+      <td>typically <strong>2&ndash;20&times;</strong> slower</td>
+      <td>usually too slow for every production replica</td>
+    </tr>
+    <tr>
+      <td><span class="pill grey">Platforms</span></td>
+      <td>linux (amd64, arm64, ppc64le, s390x, loong64, riscv64 as of Go&nbsp;1.26),
+          darwin (amd64, arm64), windows/amd64, freebsd/amd64, netbsd/amd64</td>
+      <td>check before relying on it in CI</td>
+    </tr>
+    <tr>
+      <td><span class="pill grey">Requires cgo</span></td>
+      <td>on non-Darwin platforms a C compiler must be installed</td>
+      <td>a surprise in minimal CI images</td>
+    </tr>
+    <tr class="hot">
+      <td><span class="pill red">On detection</span></td>
+      <td>report goes to stderr, the program <em>keeps running</em></td>
+      <td>&hellip;then exits with <strong>status 66</strong> &mdash; that&rsquo;s what fails your build</td>
+    </tr>
+  </table>
+</div>

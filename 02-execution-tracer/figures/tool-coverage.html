@@ -1,0 +1,43 @@
+<!--
+  Why the tracer exists: what logs and CPU profiles structurally cannot see.
+  From 02-execution-tracer/README.md: "Logs tell you what your code chose to
+  print. CPU profiles tell you where CPU time was spent, but nothing about the
+  time spent *not* running."
+-->
+<div class="fig">
+<svg viewBox="0 0 1000 300" width="100%" role="img"
+     aria-label="Bar comparison: logs and CPU profiles cover only part of a program's timeline; the execution trace covers all of it.">
+  <!-- logs -->
+  <text x="250" y="52" text-anchor="end" font-family="'Open Sans',Arial,sans-serif"
+        font-size="19" font-weight="700" fill="#5c6b7a">Logs</text>
+  <rect x="270" y="28" width="710" height="38" rx="3" fill="#f2f5f8"/>
+  <rect x="270" y="28" width="156" height="38" rx="3" fill="#8d9aa8"/>
+  <text x="286" y="53" font-family="'Open Sans',Arial,sans-serif" font-size="14"
+        font-weight="700" fill="#ffffff">what you printed</text>
+
+  <!-- cpu profile -->
+  <text x="250" y="127" text-anchor="end" font-family="'Open Sans',Arial,sans-serif"
+        font-size="19" font-weight="700" fill="#6b46c1">CPU profile</text>
+  <rect x="270" y="103" width="710" height="38" rx="3" fill="#f2f5f8"/>
+  <rect x="270" y="103" width="298" height="38" rx="3" fill="#6b46c1"/>
+  <text x="286" y="128" font-family="'Open Sans',Arial,sans-serif" font-size="14"
+        font-weight="700" fill="#ffffff">where CPU time went while running</text>
+  <text x="584" y="128" font-family="'Open Sans',Arial,sans-serif" font-size="14"
+        fill="#8d9aa8">blind to the time spent NOT running</text>
+
+  <!-- execution trace -->
+  <text x="250" y="202" text-anchor="end" font-family="'Open Sans',Arial,sans-serif"
+        font-size="19" font-weight="700" fill="#00728f">Execution trace</text>
+  <rect x="270" y="178" width="710" height="38" rx="3" fill="#00728f"/>
+  <text x="286" y="203" font-family="'Open Sans',Arial,sans-serif" font-size="14"
+        font-weight="700" fill="#ffffff">running &middot; runnable &middot; blocked &middot; syscall &middot; network &middot; GC &mdash; the whole timeline</text>
+
+  <line x1="270" y1="240" x2="980" y2="240" stroke="#d3dae1" stroke-width="1"/>
+  <text x="270" y="264" font-family="'Open Sans',Arial,sans-serif" font-size="14" fill="#5c6b7a">
+    The gaps are the bug: scheduling latency, goroutines stuck on channels and mutexes,
+  </text>
+  <text x="270" y="284" font-family="'Open Sans',Arial,sans-serif" font-size="14" fill="#5c6b7a">
+    hidden serialization, GC stop-the-world pauses.
+  </text>
+</svg>
+</div>

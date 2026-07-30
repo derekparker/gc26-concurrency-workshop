@@ -1,0 +1,38 @@
+<!-- Anatomy of a race report. Transcript is the one in 01-race-detector/README.md. -->
+<div class="fig">
+  <div class="annotated">
+<div class="term"><span class="warn">WARNING: DATA RACE</span>
+<span class="hl">Read at 0x00c00012a118 by goroutine 10:</span>
+  main.(*Bank).Transfer()
+      .../ex3-banking/main.go:70 +0x124
+  main.teller()
+      .../ex3-banking/main.go:137 +0xc8
+
+<span class="hl hl-red">Previous write at 0x00c00012a118 by goroutine 8:</span>
+  main.(*Bank).Transfer()
+      .../ex3-banking/main.go:84 +0x218
+  <span class="dim">...</span>
+
+<span class="hl hl-cyan">Goroutine 10 (running) created at:</span>
+  main.main()
+      .../ex3-banking/main.go:188 +0x32c</div>
+    <div class="callouts">
+      <div class="callout amber">
+        <h4>&#9312; One access, plus its stack</h4>
+        <p>The access that <em>triggered</em> the report. Note the address:
+           <code>0x00c00012a118</code>.</p>
+      </div>
+      <div class="callout red">
+        <h4>&#9313; The conflicting access</h4>
+        <p>&ldquo;Previous write/read&rdquo; is the earlier access. Same address,
+           different goroutine, nothing ordering them. At least one of the two
+           is always a write.</p>
+      </div>
+      <div class="callout">
+        <h4>&#9314; Where each goroutine started</h4>
+        <p>The <code>go</code> statement that launched each party &mdash; the
+           fastest way to tell identical-looking stacks apart.</p>
+      </div>
+    </div>
+  </div>
+</div>

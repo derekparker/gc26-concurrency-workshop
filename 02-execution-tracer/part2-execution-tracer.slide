@@ -1,0 +1,254 @@
+# Seeing What Your Program Actually Did
+Part II of Go Concurrency: Debugging Goroutines and Channels
+
+Derek Parker
+GopherCon 2026
+
+: Present with: present -notes -play=false   (from the repo root), then press N for this notes window.
+: This deck mirrors 02-execution-tracer/README.md, which remains the source of truth.
+: Section core is 90 min; the recommended cut runs it in 75 by compressing ex2-flightrecorder into a guided walkthrough.
+: Day-before check: *.trace is gitignored, so a fresh clone has none. Run the demo and each exercise program once to regenerate them.
+
+## Where we are
+
+.html ../slides-common/figures.html
+.html figures/three-lenses.html
+
+: Part I found memory races. Part III will inspect a stopped program. This part answers a different question entirely: where did the time actually go?
+
+## The runtime's flight-data recorder
+
+The execution tracer records **every scheduling event** in your program —
+
+goroutines starting, stopping, blocking, waiting to be scheduled, entering
+syscalls, GC pauses —
+
+with **nanosecond timestamps**, and gives you a timeline you can scrub through.
+
+: This is the pitch in one slide. Everything else is detail.
+
+## Why logs and CPU profiles aren't enough
+
+.html figures/tool-coverage.html
+
+: Logs tell you what your code chose to print. CPU profiles tell you where CPU time was spent, but nothing about the time spent NOT running.
+:
+: The tracer shows the gaps: scheduling latency, goroutines stuck on channels and mutexes, hidden serialization, GC stop-the-world pauses.
+:
+: Every exercise in this section is a bug where the logs look vague — "it's slow sometimes" — and the trace makes the cause visually obvious.
+
+## One more reason this matters in 2026
+
+As AI coding agents write more of our code, engineers spend more of their time
+on architecture, deployment, and debugging.
+
+An execution trace is exactly the kind of ground truth **neither a human nor an
+AI agent can get by reading source.**
+
+A trace file — or a flight recorder snapshot from production — is concrete
+evidence you can hand to an agent to reason from, instead of letting it guess.
+
+: Same framing as Part I, cashed in by the ex4 capstone: you'll build a trace analyzer and hand it to an agent over MCP.
+
+## What you'll learn
+
+- How to capture traces: `trace.Start`, `go test -trace`, `net/http/pprof`, and
+  the flight recorder
+- How to read the trace viewer: procs, goroutine states, blocking, GC
+- Goroutine analysis and the derived profiles (sync block, scheduler latency)
+- Annotating your own code with tasks, regions, and logs
+- Capturing rare production events with `runtime/trace.FlightRecorder`
+
+: Five things. The middle one — reading the viewer — is the skill that transfers to every Go program they'll ever profile.
+
+## This section
+
+.html figures/schedule.html
+
+: Pressure valves, in the order to pull them: compress ex2 to a guided walkthrough (-15), then ex3-io to take-home (-20, last resort — it's this section's best exercise).
+
+## Four ways to get a trace — 1. Whole program
+
+Bracket the code you care about:
+
+	f, _ := os.Create("out.trace")
+	trace.Start(f)
+	defer trace.Stop()
+
+: The blunt instrument. Great for a reproducible local run, useless for a service that's already running.
+
+## 2. Tests and benchmarks
+
+	go test -trace=trace.out ./...
+
+The cheapest way to get a trace of a specific code path — you already have the
+test that exercises it.
+
+: Worth pausing on: most people never realize the test flag exists. It's the fastest path from "I wonder" to "here's the timeline".
+
+## 3. Live services
+
+	import _ "net/http/pprof"
+
+	// then:
+	curl -o trace.out 'http://localhost:8080/debug/pprof/trace?seconds=5'
+
+If you already expose pprof, you already have this. No redeploy needed.
+
+: Ask the room how many expose /debug/pprof in production. Most hands go up. Most of them have never pulled a trace from it.
+
+## 4. Rare events in production — the flight recorder
+
+Go 1.25+. Keeps the last few seconds in a ring buffer; snapshot when something
+goes wrong.
+
+	fr := trace.NewFlightRecorder(trace.FlightRecorderConfig{
+	    MinAge:   5 * time.Second,
+	    MaxBytes: 16 << 20,
+	})
+	fr.Start()
+	// ... on anomaly:
+	fr.WriteTo(f)
+
+: This is the one that changes what's possible. You can't trace-on-demand a spike that happens once an hour — but you can keep a rolling buffer and dump it when your own latency check trips.
+:
+: That's exercise 2.
+
+## Overhead is no longer a reason to avoid this
+
+- Since **Go 1.21**, tracing costs roughly **1–2% CPU** for typical programs —
+  down from 10–20% in older releases.
+- **Go 1.22** reworked the trace format so traces stream and scale.
+- The flight recorder became official API in **Go 1.25**.
+
+If your mental model of tracing overhead came from Go 1.16, update it.
+
+: This slide exists to kill an objection before it's raised. A lot of people carry a 2019-era number in their heads.
+
+## Reading the trace viewer
+
+	go tool trace <file>.trace
+
+Starts a web server. The landing page links to:
+
+- **View trace by proc** — the main timeline
+- **Goroutine analysis** (`/goroutines`)
+- **Profiles** — pprof graphs derived from the trace
+- **User-defined tasks / regions** — your own annotations
+
+Use **Chrome** for the timeline page; the viewer is Chromium-based.
+
+: Say the Chrome thing out loud and early. Someone in the room will open it in Safari and conclude the tool is broken.
+
+## View trace by proc — the main timeline
+
+One row per `GOMAXPROCS` logical processor, showing which goroutine ran on it at
+every instant, plus rows for goroutine/heap/thread counts and GC.
+
+Navigate with the keyboard:
+
+- `w` / `s` — zoom in and out
+- `a` / `d` — pan left and right
+- click any slice to see its stack and statistics
+
+: Drill the keyboard shortcuts. People flail with the mouse in this viewer and give up. w/s/a/d is the whole interface.
+
+## The one table to internalize
+
+.html figures/goroutine-states.html
+
+: This is the core reading skill for the section, the same way the race report was for Part I.
+:
+: "Runnable" is the one to dwell on — it's the state that CPU profilers structurally cannot show you.
+
+## Goroutine analysis
+
+`/goroutines` groups goroutines by start function, with per-group breakdowns:
+
+- Execution time
+- Block time (chan send/recv, select, sync, syscall)
+- **Sched wait time** — how long it was runnable but not running
+- ...and more
+
+The front page also gives you a **count** per group. Sometimes that number *is*
+the bug.
+
+: In ex1, the front page shows sync.(*WaitGroup).Go.func1 with Count 1000. That number is the bug — before you read a single line of code.
+
+## Profiles derived from the trace
+
+pprof-style graphs the tracer can produce: network blocking, synchronization
+blocking, syscall, and **scheduler latency**.
+
+Also available headless — types are `net`, `sync`, `syscall`, `sched`:
+
+	go tool trace -pprof=sync out.trace > sync.pprof
+	go tool pprof -top sync.pprof
+
+: The headless form is what you want in CI, or when you're on a box with no browser. Also what you'd feed to an agent.
+
+## Scheduler starvation, seen
+
+.html figures/starvation.html
+
+: This is exercise 1. The heartbeat goroutine only needs microseconds of CPU, but when its timer fires it goes to the back of a run queue with ~1000 CPU-hungry goroutines ahead of it, each getting a ~10ms preemption quantum.
+:
+: Total 3.1s, Execution ~300µs, Block (select) ~1s — legitimate, it's waiting for the next tick — and Sched wait ~2.2s. Awake, ready, asking for CPU, for two-thirds of its life.
+:
+: The fix: don't spawn one goroutine per batch. Bound concurrency to roughly the number of processors. Goroutine count drops ~1000 to ~10.
+
+## A habit worth forming
+
+**Capture a trace before your fix and after. Compare them side by side.**
+
+The before/after diff of the timeline is the most convincing artifact you can
+attach to a PR —
+
+or feed to an AI agent.
+
+: Push this hard. It converts "I think this is faster" into evidence, and it's the same artifact that makes an agent useful instead of speculative.
+
+## Your turn
+
+- **Ex 1 — Scheduling.** Tail latency from too many runnable goroutines. The
+  "Runnable" state, in the wild.
+- **Ex 2 — Flight Recorder.** Catch a rare latency spike in a long-running
+  service. You can't trace on demand what you can't predict.
+- **Ex 3 — Hidden I/O.** A "parallel" pipeline that actually runs one record at
+  a time. The trace makes the serialization impossible to miss.
+- **Ex 4 — Trace Agent** *(bonus capstone)*. Parse traces programmatically with
+  the reader API, then expose your analyzer to an AI agent as an MCP server.
+
+: Ex4 needs network on first build (golang.org/x/exp/trace and the MCP SDK) — pre-fetch with go mod download before the workshop. It's the only network dependency in the repo.
+
+## Requirements
+
+- **Go 1.25+** (1.26 recommended; these modules declare `go 1.26`). The flight
+  recorder exercise needs 1.25 at minimum.
+- **Chrome/Chromium** for the timeline view.
+- Network access once for the ex4 capstone; its agent stage optionally uses
+  Claude Code.
+
+: Everything else in this workshop runs fully offline.
+
+## Wrap-up: when to reach for the tracer
+
+- **When the logs say "it's slow sometimes"** and the CPU profile looks fine.
+- **When you suspect the schedule**, not the code — latency without CPU load.
+- **In production**, with the flight recorder armed and a trigger you control.
+
+What it *can't* tell you: whether a memory access was safe (Part I), or what a
+specific variable holds right now.
+
+That's Part III.
+
+: Same wrap shape as Part I: when to reach for it, what it can't tell you. Then break.
+
+## Further reading
+
+.link https://pkg.go.dev/runtime/trace runtime/trace package docs
+.link https://go.dev/blog/execution-traces-2024 More powerful Go execution traces (Go blog, 2024)
+.link https://go.dev/blog/flight-recorder Flight Recorder in Go 1.25 (Go blog)
+.link https://pkg.go.dev/golang.org/x/exp/trace golang.org/x/exp/trace — the trace reader API
+
+: The reader API link is the one ex4 is built on.

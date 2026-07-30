@@ -1,0 +1,31 @@
+<!-- Choosing the fix. The demo applies three of these to the same counter. -->
+<div class="fig">
+  <div class="cards" style="margin-bottom:16px">
+    <div class="card">
+      <div class="kicker">start here</div>
+      <h3>sync.Mutex</h3>
+      <p>Protects a critical section of any size. Reach for it first; optimize
+         only when a profile says to.</p>
+    </div>
+    <div class="card purple">
+      <div class="kicker">reads dominate</div>
+      <h3>sync.RWMutex</h3>
+      <p>Many readers, rare writers. Only pays off when reads genuinely
+         dominate &mdash; heavier than a Mutex under write load.</p>
+    </div>
+  </div>
+  <div class="cards">
+    <div class="card amber">
+      <div class="kicker">one word, one op</div>
+      <h3>sync/atomic</h3>
+      <p>Counters and flags. Fast, and easy to misuse for anything needing two
+         operations to stay consistent &mdash; see exercise 3.</p>
+    </div>
+    <div class="card green">
+      <div class="kicker">don't share at all</div>
+      <h3>Channels</h3>
+      <p>Hand ownership to one goroutine. Often the fix that makes the bug
+         structurally impossible rather than merely guarded.</p>
+    </div>
+  </div>
+</div>

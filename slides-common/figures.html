@@ -1,0 +1,169 @@
+<!--
+  Shared figure styles for the workshop decks.
+
+  Included once per deck, on the title slide, via:
+
+      .html ../slides-common/figures.html
+
+  Every rule is scoped under .fig so nothing here can leak into present's own
+  slide chrome. Colors track the section READMEs' vocabulary: cyan for the
+  tool/the fix, red for the bug, amber for "look here".
+-->
+<style>
+.fig {
+  --go:     #00728f;
+  --go-lt:  #00add8;
+  --red:    #c62828;
+  --amber:  #a06000;
+  --green:  #1e7a46;
+  --purple: #6b46c1;
+  --ink:    #16202b;
+  --muted:  #5c6b7a;
+  --faint:  #8d9aa8;
+  --panel:  #f2f5f8;
+  --line:   #d3dae1;
+  --term:   #16202b;
+  --term-fg:#e6edf3;
+
+  font-family: 'Open Sans', Arial, sans-serif;
+  color: var(--ink);
+  line-height: 1.35;
+  margin: 12px auto 0;   /* breathing room when slide prose sits above */
+  max-width: 980px;
+}
+
+.fig * { box-sizing: border-box; }
+.fig code, .fig .mono { font-family: 'Droid Sans Mono', 'Courier New', monospace; }
+
+/* ---------- terminal panel: real output, styled like a terminal ---------- */
+.fig .term {
+  background: var(--term);
+  color: var(--term-fg);
+  border-radius: 6px;
+  padding: 14px 18px;
+  font-family: 'Droid Sans Mono', 'Courier New', monospace;
+  font-size: 17px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+}
+.fig .term .dim   { color: #8b9aab; }
+.fig .term .warn  { color: #ff8f8f; font-weight: bold; }
+.fig .term .cyan  { color: #4fd3f5; }
+.fig .term .amber { color: #ffc66d; }
+.fig .term .green { color: #6fcf97; }
+.fig .term .prompt { color: #4fd3f5; font-weight: bold; }
+
+/* a highlighted line inside a terminal panel */
+.fig .term .hl {
+  display: inline-block;
+  width: 100%;
+  background: rgba(255, 198, 109, 0.16);
+  border-left: 3px solid #ffc66d;
+  margin-left: -18px;
+  padding-left: 15px;
+}
+.fig .term .hl-red   { background: rgba(255,143,143,0.16); border-left-color: #ff8f8f; }
+.fig .term .hl-cyan  { background: rgba(79,211,245,0.14);  border-left-color: #4fd3f5; }
+
+/* ---------- annotated figure: terminal on the left, callouts right ------- */
+.fig .annotated { display: flex; gap: 22px; align-items: flex-start; }
+.fig .annotated .term { flex: 1 1 62%; font-size: 15px; }
+.fig .callouts { flex: 1 1 38%; display: flex; flex-direction: column; gap: 12px; }
+.fig .callout {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--go);
+  border-radius: 4px;
+  padding: 9px 12px;
+  background: #fff;
+}
+.fig .callout h4 { margin: 0 0 3px; font-size: 16px; font-weight: 700; color: var(--go); }
+.fig .callout p  { margin: 0; font-size: 14px; color: var(--muted); }
+.fig .callout.red    { border-left-color: var(--red); }
+.fig .callout.red h4 { color: var(--red); }
+.fig .callout.amber    { border-left-color: var(--amber); }
+.fig .callout.amber h4 { color: var(--amber); }
+.fig .callout.green    { border-left-color: var(--green); }
+.fig .callout.green h4 { color: var(--green); }
+
+/* ---------- card rows ---------- */
+.fig .cards { display: flex; gap: 16px; }
+.fig .card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--go);
+  border-radius: 5px;
+  padding: 14px 16px;
+  background: #fff;
+}
+/* keeps the rule above .q on a common baseline when card text wraps unevenly */
+.fig .card .q { margin-top: auto; }
+.fig .card.red    { border-top-color: var(--red); }
+.fig .card.amber  { border-top-color: var(--amber); }
+.fig .card.green  { border-top-color: var(--green); }
+.fig .card.purple { border-top-color: var(--purple); }
+.fig .card h3 { margin: 0 0 4px; font-size: 20px; }
+.fig .card .kicker {
+  font-size: 12px; font-weight: 700; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--faint); margin-bottom: 6px;
+}
+.fig .card p { margin: 0 0 6px; font-size: 15px; color: var(--muted); }
+.fig .card .q {
+  font-family: 'Droid Sans Mono', 'Courier New', monospace;
+  font-size: 14px; color: var(--ink);
+  border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px;
+}
+
+/* ---------- generic table figure ---------- */
+.fig table.grid { border-collapse: collapse; width: 100%; font-size: 17px; }
+.fig table.grid th {
+  text-align: left; font-size: 12px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--faint); border-bottom: 2px solid var(--line); padding: 6px 10px;
+}
+.fig table.grid td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.fig table.grid tr.hot td { background: #fff8e8; }
+.fig .pill {
+  display: inline-block; border-radius: 999px; padding: 2px 11px;
+  font-size: 14px; font-weight: 700; color: #fff; white-space: nowrap;
+}
+.fig .pill.go { background: var(--go); }
+.fig .pill.red { background: var(--red); }
+.fig .pill.amber { background: var(--amber); }
+.fig .pill.green { background: var(--green); }
+.fig .pill.purple { background: var(--purple); }
+.fig .pill.grey { background: var(--faint); }
+
+.fig .note { font-size: 14px; color: var(--muted); margin-top: 10px; }
+.fig .lede { font-size: 18px; color: var(--muted); margin: 0 0 14px; }
+
+/* ---------- schedule: time gutter + activity ---------- */
+.fig .sched { width: 100%; border-collapse: collapse; font-size: 17px; }
+.fig .sched td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.fig .sched td.t {
+  font-family: 'Droid Sans Mono', 'Courier New', monospace;
+  color: var(--go); font-weight: 700; white-space: nowrap; width: 130px;
+}
+.fig .sched td.what { font-weight: 600; width: 250px; }
+.fig .sched td.where { color: var(--muted); font-size: 15px; }
+.fig .sched tr.bonus td { color: var(--faint); }
+.fig .sched tr.bonus td.t { color: var(--amber); }
+
+/* ---------- before/after code comparison ---------- */
+.fig .compare { display: flex; gap: 18px; align-items: stretch; }
+.fig .compare > div { flex: 1; display: flex; flex-direction: column; }
+.fig .compare .hdr {
+  font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.fig .compare .before .hdr { color: var(--amber); }
+.fig .compare .after  .hdr { color: var(--green); }
+.fig .compare pre {
+  flex: 1; margin: 0; background: var(--panel); border-radius: 5px;
+  padding: 12px 14px; font-family: 'Droid Sans Mono', 'Courier New', monospace;
+  font-size: 16px; line-height: 1.5; color: var(--ink); white-space: pre;
+}
+.fig .compare .before pre { border-left: 4px solid var(--amber); }
+.fig .compare .after  pre { border-left: 4px solid var(--green); }
+</style>

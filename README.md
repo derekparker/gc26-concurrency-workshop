@@ -43,6 +43,8 @@ Each part contains:
 
 - `demo/`, the instructor-led walkthrough you follow along with
 - `exercises/`, buggy programs **you** debug yourself using the tool just covered
+- a `.slide` deck, the projected version of that section's README (see
+  [SLIDES.md](SLIDES.md)); run `./slides.sh` to present it
 
 ## Prerequisites
 
