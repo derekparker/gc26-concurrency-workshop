@@ -184,25 +184,31 @@ re-locking, your invariants are already unclear (see Russ Cox's classic
 
 </details>
 
-## Stretch: Go 1.26's Goroutine Leak Profile
+## Stretch: The Goroutine Leak Profile
 
-Go 1.26 ships an **experimental** goroutine *leak* profile, a pprof
-profile that reports only goroutines the runtime has proven can never
-wake up. Detection rides on the garbage collector: if a goroutine is
-blocked on a channel/mutex/etc. that is unreachable from any runnable
-goroutine (or anything a runnable goroutine could unblock), it's leaked.
-A goroutine in `time.Sleep` (our monitor) or `IO wait` will wake up, so
-it never appears, which is exactly the noise the plain `goroutine`
-profile makes you filter by hand.
+Go ships a goroutine *leak* profile, a pprof profile that reports only
+goroutines the runtime has proven can never wake up. Detection rides on
+the garbage collector: if a goroutine is blocked on a channel/mutex/etc.
+that is unreachable from any runnable goroutine (or anything a runnable
+goroutine could unblock), it's leaked. A goroutine in `time.Sleep` (our
+monitor) or `IO wait` will wake up, so it never appears, which is
+exactly the noise the plain `goroutine` profile makes you filter by hand.
 
-It's gated behind a **build-time** experiment; the profile is named
-`goroutineleak` (`runtime/pprof.Lookup("goroutineleak")`, or
-`/debug/pprof/goroutineleak` once you import `net/http/pprof`). This
+The profile is named `goroutineleak`
+(`runtime/pprof.Lookup("goroutineleak")`, or
+`/debug/pprof/goroutineleak` once you import `net/http/pprof`). In
+**Go 1.26** it's an experiment gated at build time; in **Go 1.27** it's
+generally available and the `GOEXPERIMENT` setting is deleted. This
 program has a production-style opt-in debug endpoint for exactly this,
 set `INGEST_DEBUG_ADDR`:
 
 ```bash
+# Go 1.26 — the GOEXPERIMENT prefix is required:
 GOEXPERIMENT=goroutineleakprofile go build -gcflags='all=-N -l' -o ingest .
+
+# Go 1.27 and later — drop the prefix:
+go build -gcflags='all=-N -l' -o ingest .
+
 INGEST_DEBUG_ADDR=127.0.0.1:8899 ./ingest &
 # wait for the MONITOR lines to start repeating (~5s), then:
 curl 'http://127.0.0.1:8899/debug/pprof/goroutineleak?debug=1'
@@ -251,10 +257,11 @@ Delve says WHY.**
 
 Caveats worth saying out loud:
 
-- **Experimental, build-time flag.** Without the `GOEXPERIMENT` build the
-  endpoint 404s (`Unknown profile`). The runtime work is done; the
-  experiment is about the API shape, and the plan of record is on-by-default
-  in Go 1.27.
+- **On Go 1.26, it's a build-time flag.** Without the `GOEXPERIMENT` build
+  the endpoint 404s (`Unknown profile`). The runtime work was already done;
+  the experiment was only about the API shape. Go 1.27 makes the profile
+  generally available and deletes the `goroutineleakprofile` GOEXPERIMENT
+  setting, so on 1.27+ the flag is not just unnecessary, it's gone.
 - Detection is *conservative*: it can miss leaks whose primitive stays
   reachable from a global or from a runnable goroutine's locals. Absence
   of proof isn't proof of absence.

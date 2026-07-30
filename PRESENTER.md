@@ -59,11 +59,19 @@ in Part I (15–20 min, fully scripted).
 |----------|-----------|-------------|
 | [01/ex4-testing](01-race-detector/exercises/ex4-testing/) | `go test -race` + `testing/synctest` lab | Homework, or live if ahead |
 | [02/ex4-traceagent](02-execution-tracer/exercises/ex4-traceagent/) Stage 1 | Programmatic trace parsing (students code) | Homework; only its Stage 2 demo is in the finale |
-| [03/ex1 leak-profile stretch](03-delve/exercises/ex1-fanout-fanin/) | Go 1.26 `goroutineleak` profile | 5-min aside during ex1 if the room is fast |
+| [03/ex1 leak-profile stretch](03-delve/exercises/ex1-fanout-fanin/) | the `goroutineleak` profile (experiment on 1.26, GA on 1.27) | 5-min aside during ex1 if the room is fast |
 
 ## Day-Before Checklist
 
 - [ ] `./setup.sh` passes on the presenting machine (Go 1.26+, Delve ≥ 1.27.0).
+- [ ] `go version` reports a **released** 1.26.x, not a release candidate.
+      `setup.sh`'s check does not catch this: `sort -V` orders `1.26` before
+      `1.26rc1`, so any `1.26rcN` satisfies the `1.26+` gate.
+- [ ] Check whether **Go 1.27 has shipped** (expected August 2026, i.e. possibly
+      the week of the conference). Both Part I and Part II end on a "Coming in
+      Go 1.27" slide; if it's out, say "shipped" instead of "coming", and drop
+      the `GOEXPERIMENT=goroutineleakprofile` step from the Part III ex1 stretch,
+      the flag is deleted in 1.27.
 - [ ] `./scripts/check_slides.sh` passes, then `./slides.sh` and press `N` once
       to confirm the notes window opens (pop-ups must be allowed for
       `127.0.0.1:3999`).

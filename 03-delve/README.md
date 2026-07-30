@@ -113,8 +113,8 @@ Worth demonstrating once each:
 - **`ex1-fanout-fanin/`**, a fan-out/fan-in pipeline that stalls
   *silently* (the runtime deadlock detector never fires). Attach or
   interrupt, group by location, find the one goroutine that's different.
-  Its stretch goal demonstrates Go 1.26's experimental **goroutine leak
-  profile** against the same stall (see below).
+  Its stretch goal demonstrates the **goroutine leak profile** against the
+  same stall (see below).
 - **`ex2-dispatcher/`**, a dispatch/collect deadlock. Solved almost
   entirely by reading `print <chan>` output: full buffer, empty `recvq`,
   loaded `sendq`.
@@ -191,17 +191,22 @@ breakpoints). Use the GUI day-to-day if you like, but the CLI is what you
 have over SSH on the box where prod is burning, and it's what scripts and
 agents can drive.
 
-### Go 1.26's goroutine leak profile (experimental)
+### The goroutine leak profile
 
-Go 1.26 adds a pprof profile that reports only goroutines the GC can
-*prove* will never wake up: build with
-`GOEXPERIMENT=goroutineleakprofile`, then read the `goroutineleak`
-profile (`runtime/pprof.Lookup("goroutineleak")` or
-`/debug/pprof/goroutineleak`). It's the fleet-scale complement to this
-section: the profile tells you **that** goroutines leaked and where
-they're parked; Delve tells you **why**. Exercise 1's stretch goal runs
-it against the silent stall, real output included,
-[see it there](exercises/ex1-fanout-fanin/README.md#stretch-go-126s-goroutine-leak-profile).
+Go adds a pprof profile that reports only goroutines the GC can *prove*
+will never wake up. Read it as `runtime/pprof.Lookup("goroutineleak")`
+or `/debug/pprof/goroutineleak`.
+
+- **Go 1.26**: experimental, gated at build time. Build with
+  `GOEXPERIMENT=goroutineleakprofile` or the endpoint 404s.
+- **Go 1.27**: generally available. The `goroutineleakprofile`
+  GOEXPERIMENT setting is deleted; the profile is simply there.
+
+It's the fleet-scale complement to this section: the profile tells you
+**that** goroutines leaked and where they're parked; Delve tells you
+**why**. Exercise 1's stretch goal runs it against the silent stall,
+real output included,
+[see it there](exercises/ex1-fanout-fanin/README.md#stretch-the-goroutine-leak-profile).
 
 ### AI agents can hold the debugger too
 

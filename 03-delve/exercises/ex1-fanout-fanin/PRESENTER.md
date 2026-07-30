@@ -193,13 +193,15 @@ invariants aren't clear.
 - **Attach on Linux.** May need `sysctl kernel.yama.ptrace_scope=0` or
   root. macOS handles the signing dance via Delve's own debugserver.
 
-## Stretch: Go 1.26 goroutine leak profile
+## Stretch: the goroutine leak profile
 
 Only run this if the room is ahead of schedule — it's a great callback
 in Part IV, and the README has full setup and captured output. The
 one-line pitch:
 
 ```bash
+# Go 1.26: experiment, gated at build time. On Go 1.27+ it's GA and the
+# GOEXPERIMENT setting is deleted — drop the prefix.
 GOEXPERIMENT=goroutineleakprofile go build -gcflags='all=-N -l' -o ingest .
 INGEST_DEBUG_ADDR=127.0.0.1:8899 ./ingest &
 # wait ~5s, then:

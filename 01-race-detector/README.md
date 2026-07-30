@@ -103,6 +103,11 @@ How to read it:
    struct) commonly produces many reports. Fix the shared state, not each
    report one at a time.
 
+The address matches *within* a run, but don't expect it to reproduce across
+runs: Go 1.26 randomizes the heap base address at startup on 64-bit platforms
+(a security hardening measure, disable with
+`GOEXPERIMENT=norandomizedheapbase64` if you ever need to).
+
 ## Cost and Configuration
 
 - **Overhead:** typically 5–10× memory and 2–20× CPU. Fine for tests,
@@ -136,7 +141,11 @@ GORACE="strip_path_prefix=$PWD/" go run -race .  # shorter paths in reports
   test rewritten to run in a bubble in ~0ms.
 - **`sync.WaitGroup.Go`** (Go 1.25) replaces the error-prone
   `wg.Add(1)` / `go func() { defer wg.Done() ... }()` dance, you'll see it
-  in the demo.
+  in the demo. You don't have to do the rewrite by hand: `go fix ./...`
+  applies it for you via the `waitgroupgo` modernizer. (`go fix` was
+  completely rebuilt in Go 1.26 as the home of Go's modernizers, on the same
+  analysis framework as `go vet`; the analyzer is named `waitgroup` in 1.26
+  and `waitgroupgo` from 1.27.)
 
 ## What the Race Detector Won't Catch
 
@@ -147,6 +156,23 @@ GORACE="strip_path_prefix=$PWD/" go run -race .  # shorter paths in reports
   individual access is synchronized but the *sequence* isn't atomic
   (exercise 3 discusses this).
 - Deadlocks and goroutine leaks, that's what sections 02 and 03 are for.
+
+## Looking Ahead: Go 1.27
+
+Expected August 2026. Nothing changes in the race detector itself, everything
+above still applies. What does move is the tooling around it:
+
+- **`testing/synctest.Sleep`**, combines `time.Sleep` and `synctest.Wait`, so
+  the usual "advance the fake clock, then let everyone settle" step is one call.
+- **`httptest.NewTestServer`**, a `Server` on an in-memory fake network,
+  designed for use inside a synctest bubble. This is what finally makes
+  concurrent HTTP tests deterministic.
+- **`go fix` gains `atomictypes`**, which rewrites primitive `sync/atomic`
+  calls into the typed wrappers: `var x int32; atomic.AddInt32(&x, 1)` becomes
+  `var x atomic.Int32; x.Add(1)`. Worth preferring regardless of the tool, the
+  typed versions don't permit non-atomic access to the same variable (a common
+  source of exactly the bugs this section is about) and they sidestep the
+  64-bit alignment trap on 32-bit architectures.
 
 ## Further Reading
 

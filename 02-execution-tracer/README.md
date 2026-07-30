@@ -96,6 +96,8 @@ This starts a web server. The landing page links to:
   synchronization blocking, syscall, and **scheduler latency**. Also available
   headless (types: `net`, `sync`, `syscall`, `sched`):
   `go tool trace -pprof=sync out.trace > sync.pprof && go tool pprof -top sync.pprof`.
+  (If you open one in pprof's own web UI, note that Go 1.26 changed its default
+  view to the flame graph; the old graph view is under View → Graph.)
 - **User-defined tasks / regions**, your own annotations (see the demo).
 
 The one table to internalize, goroutine states on the timeline:
@@ -108,9 +110,54 @@ The one table to internalize, goroutine states on the timeline:
 | Network wait / syscall | parked in the netpoller or a syscall | slow I/O, or normal, if it's supposed to wait |
 | GC / STW | garbage collector activity | allocation pressure; look at the Heap row |
 
+One note on that last row: Go 1.26 enabled the **Green Tea** garbage collector
+by default (an opt-in experiment in 1.25). It improves marking and scanning of
+small objects through better locality and CPU scalability, worth roughly a
+10–40% reduction in GC overhead for programs that lean on the collector, plus
+another ~10% on newer amd64 (Intel Ice Lake / AMD Zen 4 and up) where it uses
+vector instructions. Practical effect here: GC rows in a fresh trace are
+lighter than in traces you captured a year ago. Don't diagnose a 2024 GC
+problem from a 2026 timeline.
+
 A good habit for every exercise: **capture a trace before your fix and after,
 and compare them side by side.** The before/after diff of the timeline is the
 most convincing artifact you can attach to a PR, or feed to an AI agent.
+
+## Monitoring for This Without a Trace (Go 1.26)
+
+A trace is something you have to decide to capture, in advance, on the machine
+having the problem. Go 1.26 added scheduler metrics to
+[`runtime/metrics`](https://pkg.go.dev/runtime/metrics) that let you watch for
+the same conditions continuously:
+
+| Metric | What it counts |
+|--------|----------------|
+| `/sched/goroutines/runnable:goroutines` | ready to execute, but not executing |
+| `/sched/goroutines/running:goroutines` | executing (≤ `/sched/gomaxprocs`) |
+| `/sched/goroutines/waiting:goroutines` | waiting on I/O or a sync primitive |
+| `/sched/goroutines/not-in-go:goroutines` | in a syscall or cgo call |
+| `/sched/goroutines-created:goroutines` | total created since program start |
+| `/sched/threads/total:threads` | live runtime-owned threads |
+
+Pair them with `/sched/latencies:seconds` (the distribution of time goroutines
+spend runnable before actually running, available since Go 1.20). A rising
+`runnable` count and a fattening latency histogram *are* exercise 1's bug,
+visible without capturing anything. The counts are approximate and aren't
+guaranteed to sum to `/sched/goroutines:goroutines`.
+
+This is the same division of labor the workshop uses elsewhere: the cheap
+always-on signal tells you **that** something is wrong and roughly where; the
+expensive on-demand tool (a trace, or a flight recorder snapshot) tells you
+**why**. Put `runnable` and `/sched/latencies` on a dashboard, alert on them,
+and capture a trace when they fire.
+
+One related change worth knowing, since exercise 1's fix is "bound concurrency
+to roughly `GOMAXPROCS`": since **Go 1.25**, `GOMAXPROCS` on Linux respects the
+cgroup CPU bandwidth limit (the Kubernetes "CPU limit", not "CPU requests"),
+and on all platforms the runtime periodically re-checks it. A worker pool sized
+once at startup can therefore be wrong later. Both behaviors switch off if
+`GOMAXPROCS` is set explicitly, or via the `containermaxprocs=0` /
+`updatemaxprocs=0` GODEBUG settings.
 
 ## Requirements
 - Go 1.25+ (Go 1.26 recommended, these modules declare `go 1.26`); the flight
@@ -119,6 +166,25 @@ most convincing artifact you can attach to a PR, or feed to an AI agent.
 - Network access once for the ex4 capstone (its first build downloads
   `golang.org/x/exp/trace` and the MCP SDK); ex4's agent stage optionally uses
   Claude Code
+
+## Looking Ahead: Go 1.27
+
+Expected August 2026. `runtime/trace` itself is unchanged, the capture APIs and
+the flight recorder work exactly as described above. What changes around them:
+
+- **The goroutine leak profile goes generally available.** The
+  `GOEXPERIMENT=goroutineleakprofile` build-time flag is deleted and
+  `/debug/pprof/goroutineleak` is simply present. Part III uses it as a stretch
+  goal against a real stall,
+  [see it there](../03-delve/exercises/ex1-fanout-fanin/README.md#stretch-the-goroutine-leak-profile).
+- **Tracebacks carry pprof goroutine labels.** For modules declaring `go 1.27`
+  or later, the traceback header line includes `runtime/pprof` labels (disable
+  with the `tracebacklabels=0` GODEBUG). These are the same labels Delve groups
+  goroutines by in Part III, now present in every panic and stack dump.
+- **`go tool trace -http` binds localhost only** when given just a port
+  (`-http=:6060`), matching `go tool pprof`. Pass an explicit address
+  (`-http=0.0.0.0:6060`) to listen on all interfaces, which matters if you run
+  the viewer on a remote box.
 
 ## Additional Resources
 - [runtime/trace package docs](https://pkg.go.dev/runtime/trace)

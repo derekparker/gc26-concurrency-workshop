@@ -255,20 +255,27 @@ box where prod is burning — and it's what scripts and agents can drive.
 
 : Recent Delve releases keep improving DAP: multi-process follow-exec targets, suspended breakpoints.
 
-## Go 1.26's goroutine leak profile (experimental)
+## The goroutine leak profile
 
 A pprof profile reporting only goroutines the GC can **prove** will never wake up.
 
+	# Go 1.26 — experimental, gated at build time:
 	GOEXPERIMENT=goroutineleakprofile go build
-	# then: runtime/pprof.Lookup("goroutineleak")
-	#   or: /debug/pprof/goroutineleak
+
+	# Go 1.27 — generally available, no flag:
+	runtime/pprof.Lookup("goroutineleak")
+	/debug/pprof/goroutineleak
 
 The fleet-scale complement to this section: the profile tells you **that**
 goroutines leaked and where they're parked. Delve tells you **why**.
 
-: Caveats worth saying out loud: experimental and build-time gated (without the GOEXPERIMENT build the endpoint 404s); detection is conservative, so absence of proof isn't proof of absence; and requesting the profile triggers a full GC cycle that performs the analysis — fine on demand or in CI, don't scrape it every second.
+: In Go 1.26 this is an experiment gated behind a build-time flag — without the GOEXPERIMENT build the endpoint 404s with "Unknown profile". In Go 1.27 it's generally available and the goroutineleakprofile GOEXPERIMENT setting is deleted outright, so the endpoint is simply there.
 :
-: Plan of record is on-by-default in Go 1.27. Exercise 1's stretch goal runs it against the silent stall, with real output.
+: Check which one you're on before the demo and say so; the wrong build command is a confusing five minutes.
+:
+: Caveats that hold in both versions: detection is conservative — it can miss leaks whose primitive stays reachable from a global or from a runnable goroutine's locals, so absence of proof isn't proof of absence. And requesting the profile triggers a full GC cycle that performs the analysis, which is how it stays zero-overhead when unused. Fine on demand or in CI; don't scrape it every second.
+:
+: Exercise 1's stretch goal runs it against the silent stall, with real captured output.
 
 ## AI agents can hold the debugger too
 
