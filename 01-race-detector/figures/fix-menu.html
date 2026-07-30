@@ -20,6 +20,11 @@
       <h3>sync/atomic</h3>
       <p>Counters and flags. Fast, and easy to misuse for anything needing two
          operations to stay consistent &mdash; see exercise 3.</p>
+      <p style="font-size:14px"><strong>Prefer the typed wrappers</strong>
+         (<code>atomic.Int64</code>) over <code>atomic.AddInt64(&amp;x, 1)</code>:
+         they don&rsquo;t allow non-atomic access, and they fix the 32-bit alignment
+         trap. <code>go fix</code>&rsquo;s <code>atomictypes</code> converts them
+         for you in Go&nbsp;1.27.</p>
     </div>
     <div class="card green">
       <div class="kicker">don't share at all</div>

@@ -157,9 +157,16 @@ Navigate with the keyboard:
 
 .html figures/goroutine-states.html
 
+A note on that last row: Go 1.26 enabled the **Green Tea** garbage collector by
+default — expect **10–40% less GC overhead** than the traces you remember.
+
 : This is the core reading skill for the section, the same way the race report was for Part I.
 :
 : "Runnable" is the one to dwell on — it's the state that CPU profilers structurally cannot show you.
+:
+: Green Tea was an opt-in experiment in Go 1.25 and is on by default in 1.26. It improves marking and scanning of small objects through better locality and CPU scalability, and uses vector instructions on newer amd64 (Ice Lake / Zen 4 and up) for another ~10%.
+:
+: Why it matters here: if someone has an old trace or an old mental model, the GC rows will look meaningfully lighter now. Don't let them diagnose a 2024 GC problem from a 2026 trace.
 
 ## Goroutine analysis
 
@@ -186,16 +193,37 @@ Also available headless — types are `net`, `sync`, `syscall`, `sched`:
 	go tool pprof -top sync.pprof
 
 : The headless form is what you want in CI, or when you're on a box with no browser. Also what you'd feed to an agent.
+:
+: If you open one of these in pprof's web UI (-http), note that Go 1.26 changed the default view to the flame graph. The old graph view is still there under View -> Graph, or /ui/graph.
 
 ## Scheduler starvation, seen
 
 .html figures/starvation.html
 
+"Bound to ~GOMAXPROCS" is a moving target since Go 1.25: on Linux the runtime
+respects the cgroup CPU limit, and it re-checks periodically.
+
 : This is exercise 1. The heartbeat goroutine only needs microseconds of CPU, but when its timer fires it goes to the back of a run queue with ~1000 CPU-hungry goroutines ahead of it, each getting a ~10ms preemption quantum.
+:
+: The GOMAXPROCS note matters for the fix. Go 1.25 changed the default two ways: on Linux it considers the cgroup CPU bandwidth limit (the Kubernetes "CPU limit", not "CPU requests"), and on all OSes it periodically updates GOMAXPROCS if the limit or CPU count changes.
+:
+: So a worker pool sized once at startup from runtime.GOMAXPROCS(0) can be wrong later. Read it when you need it, or size the pool dynamically. Both behaviors switch off if GOMAXPROCS is set manually, or via GODEBUG containermaxprocs=0 / updatemaxprocs=0.
 :
 : Total 3.1s, Execution ~300µs, Block (select) ~1s — legitimate, it's waiting for the next tick — and Sched wait ~2.2s. Awake, ready, asking for CPU, for two-thirds of its life.
 :
 : The fix: don't spawn one goroutine per batch. Bound concurrency to roughly the number of processors. Goroutine count drops ~1000 to ~10.
+
+## New in Go 1.26: monitoring for this, no trace required
+
+.html figures/sched-metrics.html
+
+: This is the biggest thing Go 1.26 added for this section, and it closes a real gap.
+:
+: Until now, "runnable" was a state you could only see by capturing a trace — which you have to decide to do, in advance, on the machine having the problem. Now the goroutine-state counts are ordinary runtime/metrics you can scrape every 15 seconds forever.
+:
+: Same division of labor as the goroutine leak profile and Delve in Part III: the cheap always-on signal tells you THAT something is wrong and roughly where; the expensive on-demand tool tells you WHY.
+:
+: Practical advice for the room: put /sched/goroutines/runnable and /sched/latencies on a dashboard, alert on them, and when they fire, THEN go get a trace — or a flight recorder snapshot, which is exercise 2.
 
 ## A habit worth forming
 
@@ -230,6 +258,28 @@ or feed to an AI agent.
   Claude Code.
 
 : Everything else in this workshop runs fully offline.
+
+## Coming in Go 1.27
+
+Expected **August 2026** — days from now.
+
+- **The goroutine leak profile goes GA.** No more
+  `GOEXPERIMENT=goroutineleakprofile` — that setting is deleted, and
+  `/debug/pprof/goroutineleak` is simply there. Part III uses it as a stretch
+  goal; by next month it's just a profile you can pull.
+- **Tracebacks carry pprof goroutine labels.** For modules on `go 1.27`+, the
+  header line includes `runtime/pprof` labels. Same labels Delve groups by in
+  Part III — now in every panic and stack dump.
+- **`go tool trace -http=:6060` binds localhost only**, matching `go tool
+  pprof`. Pass `-http=0.0.0.0:6060` if you really wanted all interfaces.
+- **`runtime/trace` itself is unchanged.** The capture APIs and the flight
+  recorder work exactly as taught.
+
+: The first two are the ones worth dwelling on — both extend the "cheap signal first, expensive tool second" story this section has been building.
+:
+: The leak profile GA also means the Part III stretch goal stops needing a special build. If 1.27 has shipped by the time you present, say so and drop the GOEXPERIMENT step.
+:
+: The -http change will bite anyone who runs go tool trace on a remote box and browses to it. Worth 10 seconds.
 
 ## Wrap-up: when to reach for the tracer
 

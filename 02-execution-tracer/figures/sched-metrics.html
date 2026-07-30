@@ -1,0 +1,34 @@
+<!--
+  Go 1.26 added goroutine-state counts to runtime/metrics. Metric names and
+  descriptions are verbatim from the runtime/metrics package docs.
+-->
+<div class="fig">
+  <div class="cards" style="margin-bottom:14px">
+    <div class="card green">
+      <div class="kicker">runtime/metrics &middot; always on</div>
+      <h3>Tells you <em>that</em></h3>
+      <p>Cheap enough to scrape continuously in production. Alert on it.</p>
+    </div>
+    <div class="card amber">
+      <div class="kicker">execution trace &middot; on demand</div>
+      <h3>Tells you <em>why</em></h3>
+      <p>Which goroutines, which call sites, what they were waiting for.</p>
+    </div>
+  </div>
+
+<div class="term" style="font-size:15px"><span class="dim"># new in Go 1.26 — goroutine counts by scheduler state</span>
+<span class="hl">/sched/goroutines/runnable:goroutines   <span class="dim">ready to execute, but not executing</span></span>
+/sched/goroutines/running:goroutines    <span class="dim">executing (&lt;= /sched/gomaxprocs)</span>
+/sched/goroutines/waiting:goroutines    <span class="dim">waiting on I/O or a sync primitive</span>
+/sched/goroutines/not-in-go:goroutines  <span class="dim">in a syscall or cgo call</span>
+/sched/goroutines-created:goroutines    <span class="dim">total created since start</span>
+/sched/threads/total:threads            <span class="dim">live runtime-owned threads</span>
+
+<span class="dim"># and, already there since Go 1.20:</span>
+<span class="hl">/sched/latencies:seconds                <span class="dim">time spent runnable before running</span></span></div>
+
+  <p class="note">A rising <code>runnable</code> count and a fattening
+     <code>/sched/latencies</code> histogram <em>are</em> exercise&nbsp;1&rsquo;s bug &mdash;
+     visible without capturing a single trace. The counts are approximate and
+     are not guaranteed to sum to <code>/sched/goroutines:goroutines</code>.</p>
+</div>

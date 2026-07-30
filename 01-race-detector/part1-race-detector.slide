@@ -142,7 +142,12 @@ A green build is not proof of a race-free program.
 
 .html figures/race-report.html
 
+The address matches *within* a run, not across runs — Go 1.26 randomizes the
+heap base address at startup.
+
 : This is the core skill of this hour. Walk it top to bottom, live.
+:
+: The heap randomization point matters because people try to compare addresses between two runs, or paste an address into a bug report as if it were stable. It's a security feature (harder to predict addresses when using cgo); disable with GOEXPERIMENT=norandomizedheapbase64 if you ever need to.
 :
 : 1. The two accesses. The first stack is the access that triggered the report; 'Previous write/read' is the earlier, conflicting access. At least one of the two is always a write. Same address, two goroutines, no ordering — that's the race.
 :
@@ -223,7 +228,15 @@ Replaces the error-prone `Add`/`Done` dance. You'll see it in the demo.
 
 .html figures/waitgroup-go.html
 
+And you don't have to do it by hand — `go fix` rewrites it for you:
+
+	go fix ./...        # the waitgroupgo modernizer
+
 : Fewer places to forget a Done() and hang forever. Small quality-of-life change, but it removes an entire category of 'why is this test hanging' bugs.
+:
+: go fix was completely rebuilt in Go 1.26 and is now the home of Go's modernizers — a push-button way to update a codebase to current idioms. The analyzer that does this rewrite is called `waitgroup` in 1.26 and was renamed `waitgroupgo` in 1.27.
+:
+: It builds on the same analysis framework as go vet, so the same analyzers that report in vet can apply fixes in go fix.
 
 ## What the race detector won't catch
 
@@ -258,6 +271,25 @@ Replaces the error-prone `Add`/`Done` dance. You'll see it in the demo.
 : Every Part I race fires under -race on every run — these are deterministic. If something behaves oddly it's likely a stale edit: git checkout -- <dir> and rerun.
 :
 : Run ./scripts/exercise_checker.sh to validate. The four Part I rows ship as ❌ because the exercises ship unsolved.
+
+## Coming in Go 1.27
+
+Expected **August 2026** — days from now.
+
+- **`synctest.Sleep`** — combines `time.Sleep` and `synctest.Wait`, so the
+  common "advance the fake clock, then let everyone settle" step is one call.
+- **`httptest.NewTestServer`** — a `Server` on an in-memory fake network, built
+  for use inside a synctest bubble. Concurrent HTTP tests, deterministic.
+- **`go fix` gains `atomictypes`** — rewrites `atomic.AddInt64(&x, 1)` into the
+  typed `atomic.Int64` wrappers.
+- **Nothing changes in the race detector itself.** Everything in this hour still
+  applies exactly as taught.
+
+: That last bullet is deliberate — say it out loud rather than leaving people wondering. The race detector is mature; the movement is all in the testing tools around it.
+:
+: The two synctest additions matter for exercise 4: they make the bubble easier to drive and finally make HTTP-based concurrent tests practical inside one.
+:
+: Go 1.27 is expected in August 2026 and GopherCon is August 3-6, so this may well ship the week of the conference. Check before presenting — if it's out, change "coming" to "shipped".
 
 ## Wrap-up: when to reach for -race
 
