@@ -74,7 +74,7 @@ Three ways to start a session, all used in this part:
 :
 : --check-go-version=false downgrades it to a warning, but the warning literally says "undefined behavior" — wrong variable values, broken stacks. Upgrade instead.
 :
-: Also worth telling the room: ./setup.sh only installs Delve when it's missing. It does not check the version of an existing install, so anyone who installed dlv a year ago will sail through setup and fail here. Have them run `dlv version`.
+: ./setup.sh enforces this and upgrades a too-old Delve automatically, so if anyone hits the version error here, the fix is to re-run ./setup.sh — most likely they set up weeks ago, or have an older dlv earlier on their PATH.
 
 ## Keep your variables inspectable
 

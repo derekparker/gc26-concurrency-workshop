@@ -63,19 +63,16 @@ in Part I (15–20 min, fully scripted).
 
 ## Day-Before Checklist
 
-- [ ] `./setup.sh` passes on the presenting machine (Go 1.26+, Delve ≥ 1.27.0).
-- [ ] `dlv version` reports **1.27.0 or newer**. Delve enforces a Go range and
-      hard-errors outside it: 1.26.0–1.26.3 cover Go 1.24–1.26, and only
-      1.27.0 covers Go 1.27. `setup.sh` installs Delve only when it is
-      *missing*, so a stale existing install passes setup and fails in Part III.
-- [ ] `go version` reports a **released** 1.26.x, not a release candidate.
-      `setup.sh`'s check does not catch this: `sort -V` orders `1.26` before
-      `1.26rc1`, so any `1.26rcN` satisfies the `1.26+` gate.
+- [ ] `./setup.sh` passes on the presenting machine. It enforces a **released**
+      Go 1.26+ (pre-releases are rejected: `go1.26rc1` predates `go1.26.0`) and
+      Delve **1.27.0+**, upgrading a stale Delve rather than waving it through.
+      Worth telling students to re-run it even if they ran it weeks ago.
 - [ ] Check whether **Go 1.27 has shipped** (expected August 2026, i.e. possibly
       the week of the conference). Both Part I and Part II end on a "Coming in
       Go 1.27" slide; if it's out, say "shipped" instead of "coming", and drop
       the `GOEXPERIMENT=goroutineleakprofile` step from the Part III ex1 stretch,
-      the flag is deleted in 1.27.
+      the flag is deleted in 1.27. Delve 1.27.0 already supports Go 1.27, so
+      `setup.sh` needs no change either way.
 - [ ] `./scripts/check_slides.sh` passes, then `./slides.sh` and press `N` once
       to confirm the notes window opens (pop-ups must be allowed for
       `127.0.0.1:3999`).

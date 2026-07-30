@@ -70,8 +70,8 @@ Version of Delve is too old for Go version go1.27
 behavior" is exactly what it says: wrong variable values, broken stacks.
 Upgrade instead.
 
-Note that `./setup.sh` only installs Delve when it's *missing* — it does not
-check the version of an existing install. Run `dlv version` yourself.
+`./setup.sh` checks this for you and upgrades a too-old Delve, so re-run it
+if it's been a while since you set up.
 
 Three ways to start a session, all used in this part:
 
