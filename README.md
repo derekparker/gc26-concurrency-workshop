@@ -13,6 +13,17 @@ AI coding tools are changing what engineers spend their time on. As agents write
 
 Mastering these tools is how you stay the engineer who can say *what the program actually did*.
 
+## Following Along as a Student
+
+If you're working through this workshop on your own (not presenting it),
+clone the `gophercon-2026-workshop` branch, it strips out the presenter-only
+material and keeps everything you need:
+
+```bash
+git clone --branch gophercon-2026-workshop https://github.com/derekparker/gc26-concurrency-workshop.git
+cd gc26-concurrency-workshop
+```
+
 ## Quick Start
 
 ```bash
