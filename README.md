@@ -24,6 +24,14 @@ git clone --branch gophercon-2026-workshop https://github.com/derekparker/gc26-c
 cd gc26-concurrency-workshop
 ```
 
+In the room? Scan this rather than copying the line off a projector:
+
+<img src="assets/clone-qr.png" alt="QR code containing the git clone command above" width="180">
+
+It encodes that command as plain text, so your phone displays it rather than
+opening anything, then copy it across to your laptop. Regenerate it with
+[`./scripts/make_qr.sh`](scripts/make_qr.sh) if the URL or branch ever changes.
+
 ## Quick Start
 
 ```bash

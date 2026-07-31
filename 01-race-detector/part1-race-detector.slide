@@ -51,7 +51,7 @@ with **no synchronization** ordering the accesses.
 As AI agents write more of our code, engineers spend less time writing and more
 time reviewing and debugging code they didn't write.
 
-- A race report is **ground truth** — not an inference from reading source, by
+- A race report is **a factual report** — not an inference from reading source, by
   you *or* by an AI.
 - Paste one into your AI assistant and it fixes the real bug. An agent with a
   race report fixes the real bug; an agent without one guesses.
@@ -75,7 +75,7 @@ Add `-race` to any build-style command:
 	go test  -race ./...
 	go build -race .     # instrumented binary for staging/canary
 
-That's the whole interface. The skill is in reading what comes back.
+Invocation is simple, the skill is in reading what comes back.
 
 : Emphasize go build -race — people forget you can ship an instrumented binary to a canary or staging replica and catch races under real traffic.
 
@@ -202,7 +202,7 @@ Count the distinct addresses, not the distinct warnings.
 - Run `go test -race ./...` in CI. **Non-negotiable** for concurrent code — the
   cheapest place to catch a race, and the exit code fails the build.
 - The detector only finds races your tests *provoke*. Add tests that exercise
-  concurrency deliberately: multiple goroutines hammering the API.
+  concurrency deliberately.
 - `-race` lowers throughput. Set timeouts accordingly — a test that passes at
   1× may time out at 10×.
 
@@ -241,7 +241,7 @@ And you don't have to do it by hand — `go fix` rewrites it for you:
 ## What the race detector won't catch
 
 - Races on code paths that **never executed** during the run.
-- Races the schedule happened to order on this run — run tests repeatedly and
+- Races the scheduler happened to order on this run, run tests repeatedly and
   under load; `-count=` helps.
 - **Logical races** that aren't data races: check-then-act bugs where every
   individual access is synchronized but the *sequence* isn't atomic.
