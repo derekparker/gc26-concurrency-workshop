@@ -42,7 +42,7 @@ with **nanosecond timestamps**, and gives you a timeline you can scrub through.
 As AI coding agents write more of our code, engineers spend more of their time
 on architecture, deployment, and debugging.
 
-An execution trace is exactly the kind of ground truth **neither a human nor an
+An execution trace is exactly the kind of data **neither a human nor an
 AI agent can get by reading source.**
 
 A trace file — or a flight recorder snapshot from production — is concrete
@@ -198,12 +198,22 @@ Also available headless — types are `net`, `sync`, `syscall`, `sched`:
 
 ## Scheduler starvation, seen
 
+**This is exercise 1**, coming up next: a service crunches 1000 analytics
+batches — one goroutine each — while a `heartbeat` goroutine must tick every
+10ms or the orchestrator restarts the instance.
+
+The heartbeat needs *microseconds* of CPU. It still misses, by seconds.
+
 .html figures/starvation.html
 
 "Bound to ~GOMAXPROCS" is a moving target since Go 1.25: on Linux the runtime
 respects the cgroup CPU limit, and it re-checks periodically.
 
-: This is exercise 1. The heartbeat goroutine only needs microseconds of CPU, but when its timer fires it goes to the back of a run queue with ~1000 CPU-hungry goroutines ahead of it, each getting a ~10ms preemption quantum.
+: Set the scene before they look at the picture — the heartbeat row is the whole point of the figure and it means nothing without the setup.
+:
+: The heartbeat goroutine only needs microseconds of CPU, but when its timer fires it goes to the back of a run queue with ~1000 CPU-hungry goroutines ahead of it, each getting a ~10ms preemption quantum.
+:
+: The symptom as ops reports it: "randomly getting restarted under load". p50 is 11ms against a 10ms target — fine. p99 is 1.3s. Invisible in logs, invisible in a CPU profile, because the heartbeat isn't doing anything slowly; it isn't being run at all.
 :
 : The GOMAXPROCS note matters for the fix. Go 1.25 changed the default two ways: on Linux it considers the cgroup CPU bandwidth limit (the Kubernetes "CPU limit", not "CPU requests"), and on all OSes it periodically updates GOMAXPROCS if the limit or CPU count changes.
 :
@@ -236,37 +246,14 @@ or feed to an AI agent.
 
 : Push this hard. It converts "I think this is faster" into evidence, and it's the same artifact that makes an agent useful instead of speculative.
 
-## Your turn
-
-- **Ex 1 — Scheduling.** Tail latency from too many runnable goroutines. The
-  "Runnable" state, in the wild.
-- **Ex 2 — Flight Recorder.** Catch a rare latency spike in a long-running
-  service. You can't trace on demand what you can't predict.
-- **Ex 3 — Hidden I/O.** A "parallel" pipeline that actually runs one record at
-  a time. The trace makes the serialization impossible to miss.
-- **Ex 4 — Trace Agent** *(bonus capstone)*. Parse traces programmatically with
-  the reader API, then expose your analyzer to an AI agent as an MCP server.
-
-: Ex4 needs network on first build (golang.org/x/exp/trace and the MCP SDK) — pre-fetch with go mod download before the workshop. It's the only network dependency in the repo.
-
-## Requirements
-
-- **Go 1.25+** (1.26 recommended; these modules declare `go 1.26`). The flight
-  recorder exercise needs 1.25 at minimum.
-- **Chrome/Chromium** for the timeline view.
-- Network access once for the ex4 capstone; its agent stage optionally uses
-  Claude Code.
-
-: Everything else in this workshop runs fully offline.
-
 ## Coming in Go 1.27
 
 Expected **August 2026** — days from now.
 
-- **The goroutine leak profile goes GA.** No more
-  `GOEXPERIMENT=goroutineleakprofile` — that setting is deleted, and
-  `/debug/pprof/goroutineleak` is simply there. Part III uses it as a stretch
-  goal; by next month it's just a profile you can pull.
+- **The goroutine leak profile goes GA.** A pprof profile listing goroutines
+  that are blocked forever — parked on a channel or mutex nothing will ever
+  touch again. New in 1.26, but gated behind a build flag; in 1.27
+  `/debug/pprof/goroutineleak` is simply there. *Part III teaches it.*
 - **Tracebacks carry pprof goroutine labels.** For modules on `go 1.27`+, the
   header line includes `runtime/pprof` labels. Same labels Delve groups by in
   Part III — now in every panic and stack dump.
@@ -277,9 +264,13 @@ Expected **August 2026** — days from now.
 
 : The first two are the ones worth dwelling on — both extend the "cheap signal first, expensive tool second" story this section has been building.
 :
-: The leak profile GA also means the Part III stretch goal stops needing a special build. If 1.27 has shipped by the time you present, say so and drop the GOEXPERIMENT step.
+: The leak profile is the room's first exposure to it, so don't assume the name means anything — one sentence is enough here: a leaked goroutine is one that will never wake up, and this profile lists them with the stack that parked them. Part III has a full slide and uses it in exercise 1's stretch goal; resist teaching it twice.
+:
+: The GA also means the Part III stretch goal stops needing a special build. In 1.26 it's GOEXPERIMENT=goroutineleakprofile at build time or the endpoint 404s. If 1.27 has shipped by the time you present, say so and drop the GOEXPERIMENT step.
 :
 : The -http change will bite anyone who runs go tool trace on a remote box and browses to it. Worth 10 seconds.
+:
+: The -http change is the last of the teaching content — the wrap-up is next, then they're working.
 
 ## Wrap-up: when to reach for the tracer
 
@@ -292,7 +283,30 @@ specific variable holds right now.
 
 That's Part III.
 
-: Same wrap shape as Part I: when to reach for it, what it can't tell you. Then break.
+: Same wrap shape as Part I: when to reach for it, what it can't tell you.
+:
+: This closes the taught material — the exercises are next, so don't say "then break" here. The Part III handoff line lands again at the end of the exercises.
+
+## Your turn
+
+- **Ex 1 — Scheduling.** Tail latency from too many runnable goroutines. The
+  "Runnable" state, in the wild.
+- **Ex 2 — Flight Recorder.** Catch a rare latency spike in a long-running
+  service. You can't trace on demand what you can't predict.
+- **Ex 3 — Hidden I/O.** A "parallel" pipeline that actually runs one record at
+  a time. The trace makes the serialization impossible to miss.
+- **Ex 4 — Trace Agent** *(bonus capstone)*. Parse traces programmatically with
+  the reader API, then expose your analyzer to an AI agent as an MCP server.
+
+You'll need **Go 1.25+** (1.26 recommended; these modules declare `go 1.26`),
+**Chrome/Chromium** for the timeline view, and network access once for ex4 —
+everything else runs fully offline.
+
+: Ex4 needs network on first build (golang.org/x/exp/trace and the MCP SDK) — pre-fetch with go mod download before the workshop. It's the only network dependency in the repo. Its agent stage optionally uses Claude Code.
+:
+: On the version floor: the flight recorder exercise needs 1.25 at minimum, so that's the hard one. If someone is on 1.24 they can still do ex1 and ex3.
+:
+: Leave this slide up while they work — it's the only one they need on screen. Take the break when they're done, and pick up Part III after.
 
 ## Further reading
 
