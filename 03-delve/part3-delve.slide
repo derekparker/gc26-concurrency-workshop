@@ -32,10 +32,11 @@ channel. Who holds that lock. Who wrote that value.
 As AI tools write a growing share of our code, engineers spend a growing share
 of their time debugging code they didn't write.
 
-- A debugger is the fastest way to build ground truth about unfamiliar code.
+- A debugger is the fastest way to build a mental model about unfamiliar code.
   You don't have to *understand* 400 goroutines to ask Delve which six places
   they're stuck in.
-- It cuts both ways: agents can drive Delve too, over headless RPC or DAP.
+- It works in the AI era: agents can drive Delve too, over headless RPC, DAP
+  or more natively through the DAP MCP Server.
 - A debugger transcript — "these goroutines, parked on this channel, holding
   these values" — is exactly the high-signal evidence that keeps an AI
   assistant fixing the real bug instead of guessing.
