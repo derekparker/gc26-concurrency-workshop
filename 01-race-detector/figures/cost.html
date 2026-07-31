@@ -24,7 +24,11 @@
     </tr>
     <tr>
       <td><span class="pill grey">Requires cgo</span></td>
-      <td>on non-Darwin platforms a C compiler must be installed</td>
+      <td>the detector <em>is</em> ThreadSanitizer &mdash; a C++ runtime library
+          from LLVM, not Go code. The Go runtime calls into it through cgo, so
+          <code>-race</code> implies <code>CGO_ENABLED=1</code>; on non-Darwin
+          platforms the link step needs an external linker, i.e. an installed C
+          compiler</td>
       <td>a surprise in minimal CI images</td>
     </tr>
     <tr class="hot">

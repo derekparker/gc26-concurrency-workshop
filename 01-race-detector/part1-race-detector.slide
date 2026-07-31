@@ -85,7 +85,11 @@ Invocation is simple, the skill is in reading what comes back.
 
 .code demo/counter.go /^func \(inc \*incrementor\) increment/,/^}/
 
+.code demo/counter.go /var wg sync.WaitGroup/,/wg.Wait\(\)/
+
 : This is 01-race-detector/demo/counter.go, unmodified. Two goroutines call increment concurrently.
+:
+: Point at the two wg.Go lines — that's the whole concurrency story. One receiver, two goroutines, 100000 unsynchronized read-modify-writes each. The line after this is the printf: 'Should be 200000... right?'
 :
 : Run it without -race first: the count is wrong, but nothing complains. Then run it with -race.
 :
@@ -97,11 +101,18 @@ Invocation is simple, the skill is in reading what comes back.
   operation is instrumented.
 - Every sync op is a clock tick: mutex lock/unlock, channel send/receive,
   `WaitGroup.Wait`, atomics, goroutine start.
-- Using **vector clocks**, the runtime tracks the **happens-before** relation
-  defined by the [Go memory model](https://go.dev/ref/mem).
+- A **vector clock** is one counter *per goroutine* — goroutine G's clock says
+  "here is the latest tick I have seen from every other goroutine." A sync op
+  merges the two clocks involved; that's how one goroutine learns what another
+  has already done.
+- With those clocks the runtime tracks the **happens-before** relation defined
+  by the [Go memory model](https://go.dev/ref/mem): A happened before B if A's
+  clock is at or behind B's in every slot.
 - If two conflicting accesses are not ordered by happens-before, that's a data
   race — *even if the accesses didn't physically collide on this run.*
 
+: The vector clock bullet is the mechanism people usually hand-wave. One line if you're short on time: it's a counter per goroutine, and locking a mutex copies the unlocker's knowledge into the locker's clock.
+:
 : That last clause is the one that surprises people. Don't skip it — it sets up the next slide, and it's why the detector is so much better than 'run it a thousand times and hope'.
 
 ## Why it reports races you never saw happen
@@ -183,6 +194,8 @@ Count the distinct addresses, not the distinct warnings.
 
 : Overhead is the reason people give for not running it. Give them the real numbers so they can make the real tradeoff.
 :
+: The cgo row explains a lot of confused CI tickets. The detector is not written in Go — it's LLVM's ThreadSanitizer, a C++ library. Go ships it prebuilt (runtime/race/race_linux_amd64.syso and friends), but the runtime talks to it over cgo, and on Linux the link goes through an external linker. So a scratch/distroless builder with CGO_ENABLED=0 and no gcc fails at `go test -race` with a linker error, not a helpful message.
+:
 : Status 66 is what fails your build — worth calling out explicitly.
 
 ## Tuning with GORACE
@@ -215,12 +228,21 @@ deterministic.
 
 - The race detector understands synctest's synchronization, so `synctest` +
   `-race` is a powerful combination for testing concurrent code.
-- A 2.4-second timing test runs in a bubble in ~0ms.
+- **The clock is fake.** Inside the bubble, when every goroutine is blocked, the
+  bubble advances time *instantly* to the next timer instead of waiting. A
+  2.4-second timing test finishes in ~0ms — no wall-clock sleeping happens.
+- **That's what buys determinism too.** With a real clock, "wait 100ms and hope
+  the worker got there" is a guess that fails on a loaded CI box. The fake clock
+  only moves when nothing can run, so there is exactly one ordering.
 
 The bonus lab, `exercises/ex4-testing/`, is a hands-on tour of both points: a
 green test suite hiding a race from CI, and that 2.4-second test rewritten.
 
 : Homework by default. If you're ahead of the clock this is fully scripted and runs in 15–20 minutes.
+:
+: The key insight to land in one sentence: the bubble knows when *all* its goroutines are blocked (durably blocked — on a channel, mutex, or timer inside the bubble), and at that moment there is nothing to do but move the clock. So it does, immediately. Fast and deterministic are the same property, not two.
+:
+: This is also why time.Sleep in a synctest test is no longer a code smell — inside a bubble it costs nothing and orders the test.
 
 ## sync.WaitGroup.Go — Go 1.25
 
@@ -258,19 +280,12 @@ And you don't have to do it by hand — `go fix` rewrites it for you:
 : The demo walks counter.go through mutex.diff, trace.diff, fix-mutex.diff, atomic.diff in sequence.
 :
 : The point to land: atomic is not 'the fast mutex'. It's correct only when the whole invariant fits in one operation — which is exactly what exercise 3 violates.
-
-## Your turn
-
-- **Exercise 1 — Stats Tracker.** Invisible counter races. The report is clean
-  and the fix is short; start here to build the reading habit.
-- **Exercise 2 — Cache & Metrics.** Flaky map crashes. Concurrent map access,
-  the runtime's own fatal error, and why that isn't always a race report.
-- **Exercise 3 — Banking.** "Looks synchronized but isn't." Every access is
-  locked; the sequence still isn't atomic. The hardest of the three.
-
-: Every Part I race fires under -race on every run — these are deterministic. If something behaves oddly it's likely a stale edit: git checkout -- <dir> and rerun.
 :
-: Run ./scripts/exercise_checker.sh to validate. The four Part I rows ship as ❌ because the exercises ship unsolved.
+: The alignment trap, if anyone asks (or if you have 30 seconds): the 64-bit atomic functions — AddInt64, LoadUint64, CompareAndSwapInt64 — require their operand to be 64-bit aligned. On 64-bit platforms everything already is, so you never notice. On 32-bit platforms (386, arm, mips, and GOARCH=wasm) the compiler only guarantees 8-byte alignment for the *first word* of an allocated struct, array, or slice element. So `struct { a int32; b int64 }` puts b at offset 4, and atomic.AddInt64(&s.b, 1) panics — 'invalid memory address or nil pointer dereference' on some ports, an unaligned-access fault on others. It's documented as a known bug at the bottom of the sync/atomic package docs.
+:
+: The classic workaround was to hand-order fields so the 64-bit ones come first, or pad with a dummy int64. That's the trap: the code compiles, passes all your tests on your amd64 laptop, and blows up only on a 32-bit target — a Raspberry Pi, a 32-bit ARM embedded box, or a wasm build.
+:
+: atomic.Int64 fixes it structurally: the type embeds an align64 marker, so the compiler guarantees the alignment wherever you put it. Nothing to remember, nothing to order by hand. That's the real argument for the typed wrappers, beyond the nicer API — go fix's atomictypes in 1.27 just makes the migration mechanical.
 
 ## Coming in Go 1.27
 
@@ -290,6 +305,21 @@ Expected **August 2026** — days from now.
 : The two synctest additions matter for exercise 4: they make the bubble easier to drive and finally make HTTP-based concurrent tests practical inside one.
 :
 : Go 1.27 is expected in August 2026 and GopherCon is August 3-6, so this may well ship the week of the conference. Check before presenting — if it's out, change "coming" to "shipped".
+:
+: This is the last slide before hands-on, so land it and move — the room's attention should go to the exercises, not to a feature that isn't out yet.
+
+## Your turn
+
+- **Exercise 1 — Stats Tracker.** Invisible counter races. The report is clean
+  and the fix is short; start here to build the reading habit.
+- **Exercise 2 — Cache & Metrics.** Flaky map crashes. Concurrent map access,
+  the runtime's own fatal error, and why that isn't always a race report.
+- **Exercise 3 — Banking.** "Looks synchronized but isn't." Every access is
+  locked; the sequence still isn't atomic. The hardest of the three.
+
+: Every Part I race fires under -race on every run — these are deterministic. If something behaves oddly it's likely a stale edit: git checkout -- <dir> and rerun.
+:
+: Run ./scripts/exercise_checker.sh to validate. The four Part I rows ship as ❌ because the exercises ship unsolved.
 
 ## Wrap-up: when to reach for -race
 
