@@ -350,17 +350,117 @@ walkthrough step 6 — not part of the official fix, see that step for why.
 
 ## Ask the room
 
+Answers are for you, not the slides. Let students swing first — the wrong
+answers are the teachable part.
+
 - Why does the plain run only crash *sometimes*, while `-race` complains
   *every* time? What does the detector track that the map tripwire doesn't?
+
+  The runtime map guard isn't a race detector — it's a flag check. Every map
+  write sets a `hashWriting`-style bit on the map header for the duration of
+  the operation and clears it after; if a write observes the bit already
+  set, or a read observes it set, that's the `fatal error: concurrent map
+  writes` (or `concurrent map read and map write`) panic. That only fires
+  when two accesses **physically overlap in time** on the same map header —
+  and a map write is a handful of instructions. Two of the six-plus
+  goroutines hitting `RecordMetric` have to land their tiny critical windows
+  on top of each other for the flag to catch it. Most of the time they
+  don't; the writes interleave cleanly at the instruction level and the
+  program finishes looking correct. It's also *only* a write/write (and
+  read/write) check on map operations specifically — it has no idea
+  `CachedResult.HitCount++` even exists, because that's not a map access at
+  all.
+
+  `-race` doesn't wait for a physical collision. It's shadow-memory and
+  vector-clock tracking (ThreadSanitizer-style): every load and store is
+  instrumented, and the runtime keeps a per-goroutine vector clock plus
+  recent-access history per memory word. It reports a race whenever it sees
+  two accesses to the same address, from different goroutines, at least one
+  a write, with no happens-before edge between them — regardless of whether
+  they landed at the same nanosecond. That's a property of the program's
+  *synchronization structure*, not of one run's timing luck, which is why it
+  shows up on every run: the missing lock is there every time, even when the
+  scheduler doesn't happen to make it visible.
+
 - `GetAllMetrics` uses `maps.Copy` to snapshot the map. Copying is a *read*
   operation — why is it still racy against writers?
+
+  "Copying is a read" is true at the level of *your* intent, not at the
+  level of what the runtime executes. `maps.Copy(dst, src)` (main.go:87 in
+  the racy version, `main.go:324` in the fix) walks `src` bucket by bucket
+  and issues a `mapaccess`-style read for every entry, then a `mapassign`
+  into `dst`. Meanwhile `RecordMetric` (main.go:76) is doing `mapassign` on
+  that same `src` map from other goroutines — and a map write in Go isn't
+  just "set one value," it can grow the map, split buckets, and move
+  entries between old and new bucket arrays. If `maps.Copy`'s iterator is
+  mid-walk over a bucket that a concurrent write is relocating, it can read
+  a tophash byte and a key/value slot that no longer agree with each other,
+  follow a bucket pointer that's being swapped out from under it, or (in the
+  worst case) see memory that isn't in a consistent map-shaped state at all.
+  The result *value* `maps.Copy` hands you back is a new, uncontended map —
+  but getting there required many individual reads of memory that a writer
+  was concurrently mutating, and each of those reads is what `-race` (and,
+  on a bad day, the runtime's own guard) is flagging. "Read-only from the
+  caller's perspective" and "no shared-memory access during the call" are
+  different claims, and only the second one is race-free.
+
 - The race on `CachedResult.HitCount` survives even if you lock every map
   operation perfectly. Where does that race live, and why is a lock on the
   *map* the wrong tool for it?
+
+  It lives one hop past the map, on the heap, in memory the map doesn't own
+  at all. `s.cache[key]` gives you back a `*CachedResult` — a pointer that
+  the map stored, not the struct itself. Once `GetFromCache` (main.go:39-44
+  in the racy version) has that pointer in hand, `result.HitCount++` never
+  touches the map's buckets again; it's a plain read-modify-write on an
+  `int` field at a fixed heap address, indistinguishable to the runtime from
+  any other unsynchronized shared-field race. A `cacheMu` mutex — even a
+  perfectly-placed one — only ever serializes the *map operation* that hands
+  out the pointer. It has zero relationship to what any goroutine does with
+  that pointer afterward. Worse, under `RWMutex` specifically: `RLock` lets
+  multiple readers run `GetFromCache` concurrently by design, and every one
+  of them can fetch the *same* pointer for the same hot key and race to
+  increment the *same* `HitCount` — the walkthrough's step 5 confirms this
+  exactly, `locks.diff` leaves 3 races, all on `main.go:47`
+  (`result.HitCount++`) and the `GetCacheStats` read. The fix isn't a bigger
+  lock scope, it's recognizing the field needs its *own* synchronization
+  story independent of the map's — here, `atomic.Int64`, which is correct
+  under a shared `RLock` because the increment itself is a single atomic
+  instruction with no read-modify-write window for two goroutines to land
+  in.
+
 - `sync.Map`'s docs describe exactly the cache's access pattern (stable,
   disjoint-per-goroutine keys, read-mostly) — yet the benchmark showed it
   *losing* to `RWMutex` here. What does that tell you about trusting a
   "documented fit" without measuring?
+
+  The measured numbers (Apple M1, 8 cores, `bench_test.go`'s 95/5 read/write
+  mix over disjoint per-goroutine key ranges — the same shape as the real
+  workers): `RWMutex` + `atomic.Int64` at ~136-152 ns/op, 2 B/op, 0
+  allocs/op, versus `sync.Map` at ~160-164 ns/op, 5 B/op, 0 allocs/op —
+  `sync.Map` about 15% slower on the exact workload its own doc comment
+  describes.
+
+  The doc comment isn't wrong, it's incomplete without the constants.
+  `sync.Map`'s fast path — a `Load` on a key already promoted into the
+  read-only map — really is close to free: one atomic pointer read, no
+  mutex. But that fast path only fully pays off once the key set has
+  *stabilized* and writes have essentially stopped. This workload never
+  gets there: every `StoreInCache` on a new or updated key, and every
+  `InvalidateCacheEntry` delete, has to go through the mutex-guarded dirty
+  map (and, on a miss against the read map, promotion bookkeeping) — and at
+  a 95/5 ratio there's a steady trickle of exactly that traffic, forever.
+  Layer on `sync.Map`'s `any`-typed `Load`/`Store` API, which costs an
+  interface conversion per entry (matches the extra `B/op` on `sync.Map`
+  above; `RWMutex`'s access is direct and unboxed), and the constant-factor
+  overhead outweighs what the lock-free read path saves at this contention
+  level. None of that is visible from the doc comment's description of
+  *access pattern* — it only shows up in the doc comment's fine print about
+  *implementation* (dirty map, mutex, promotion) and, ultimately, in a
+  benchmark. "Matches the documented use case" earns a workload the right to
+  be *tried* against `sync.Map`; it doesn't earn `sync.Map` the win without
+  measuring, and hardware/contention differences mean even this table is a
+  reason to re-run the benchmark, not cite it.
 
 ## Common pitfalls
 

@@ -189,6 +189,15 @@ if vip.ID != 0 {
 happen under the exclusive lock, `RLock` readers see a consistent
 snapshot.
 
+The whole fix is in `solution.diff`, applied from this directory:
+
+```bash
+git apply solution.diff        # Transfer takes Lock, LargestAccount returns a copy
+```
+
+> Undo it with `git apply -R solution.diff` when you want the racy version
+> back for the next session.
+
 Verify:
 
 ```bash
@@ -208,16 +217,96 @@ AUDIT PASSED: the books balance
 
 ## Ask the room
 
+Answers are for you, not the slides. Let students swing first — the wrong
+answers are the teachable part.
+
 - Why didn't `go vet` catch this? What *can* static analysis know about a
   mutex, and what can it never know?
+
+  `go vet` is purely syntactic and type-level. It can catch things like
+  `sync.Mutex` (or a struct embedding one) being copied by value — the
+  `copylocks` check — because that's a static property of the code: a
+  `Mutex` type appearing on the right-hand side of an assignment or passed
+  by value. What it fundamentally cannot know is *intent*: which mutex, if
+  any, is supposed to protect which field, whether a given access needs a
+  read lock or a write lock, or whether a lock is even held at the point of
+  an access. `go vet` has no model of a "critical section" — it never
+  simulates two goroutines running at once, so it has no way to notice that
+  `Transfer` writes `from.balance` while holding only `RLock`. That's not a
+  gap in this particular check; it's out of scope for what static analysis
+  over a single control-flow path can express. `-race` catches it because
+  it's a dynamic tool — it watches actual concurrent executions and their
+  happens-before edges, which is the only place "was this access properly
+  synchronized *relative to that other access*" is even a well-formed
+  question.
+
 - Both goroutines hold `b.mu` when they race. If the lock is held, how is
   that a race? (Force them to say the words: `RWMutex.RLock` does not
   exclude other `RLock` holders.)
+
+  Because "holding the lock" is doing less work than it sounds like.
+  `RWMutex` has two admission policies: `Lock` (the writer lock) excludes
+  *everyone* — other writers and all readers. `RLock` only excludes
+  writers; it explicitly allows any number of concurrent `RLock` holders.
+  The author's mental model was "the lock is held, so we're safe" — but
+  the actual guarantee `RLock` gives you is "no writer can run while I
+  hold this," not "no one else can run." Four tellers can all call
+  `Transfer`, all call `b.mu.RLock()`, all get in, and all run
+  `from.balance = newFromBalance` at the same time — every one of them
+  technically "holding the lock," and none of them excluded from anything
+  that matters. The bug isn't that the mutex failed; it's that `RLock` was
+  the wrong admission policy for a method that mutates. The one-sentence
+  version to land: `RWMutex.RLock` does not exclude other `RLock` holders,
+  it only excludes `Lock`.
+
 - Corruption clusters around large transfer amounts. Why? What does that
   say about the relationship between a race's *window* and its *symptoms*?
+
+  `fraudCheck` only runs for `amount > 95`, and it sits *between* the
+  balance reads (`from.balance < amount` at line 70, and the snapshots at
+  74–75) and the balance writes (83–84). For small transfers that gap is a
+  handful of instructions; for large transfers it's ~800 loop iterations of
+  compute. A race is a collision between two goroutines' accesses to the
+  same memory — the wider the window during which another goroutine can
+  interleave, the higher the probability two tellers land inside it on any
+  given run. So the *symptom rate* — how often you observe corruption — is
+  governed by the window size, but the *existence* of the race is not. The
+  race is present on every transfer, small or large, the moment `Transfer`
+  takes `RLock` instead of `Lock`; a $1 transfer with no `fraudCheck` delay
+  is just as racy, it's only less likely to get caught in the act. This is
+  the same point as ex1's "the race is on 100% of runs, the loss is rare" —
+  worth calling back to if you taught that exercise first. It's also why
+  "it passed in testing" is such a weak signal: your test's window sizes
+  and thread interleavings are not your production load's.
+
 - After the fix, is `Transfer` *atomic* to an outside observer, or merely
   race-free? What could `GetBalance` observe mid-transfer if we replaced
   the mutex with per-field atomics?
+
+  With the mutex fix, `Transfer` is genuinely atomic to an outside
+  observer, not just race-free. Because the entire read-decide-commit
+  sequence (check funds, run `fraudCheck`, write both balances) happens
+  under one held `Lock`, and `GetBalance`/`TotalBalance` can only run under
+  `RLock` — which `Lock` excludes — no outside reader can ever observe the
+  state between `from.balance` being debited and `to.balance` being
+  credited. From `GetBalance`'s point of view, a transfer either hasn't
+  happened yet or has fully happened; there is no in-between. That's a
+  stronger property than "no data race" — it's a whole-operation
+  invariant, and it's exactly what the Common pitfalls section's
+  `atomic.Int64` warning is about from the other direction: swapping the
+  mutex for per-field atomics on `balance` would make each individual
+  write race-free (each `Store` is atomic on its own) but would destroy
+  this atomicity. `GetBalance(fromID)` could run *after* the debit's
+  atomic store but `GetBalance(toID)` could run *before* the credit's
+  atomic store — a window where the money has left `from` and not yet
+  landed in `to`. No single field is ever corrupted or torn, and `-race`
+  would report nothing, but an external observer polling both balances
+  could see a snapshot where the total is short by exactly `amount` — money
+  transiently vanishes from the ledger's point of view even though every
+  individual memory access was perfectly synchronized. That's the
+  distinction to land: atomics buy you per-access safety; a mutex around
+  the whole operation buys you a consistency invariant across accesses.
+  Race-free is necessary, not sufficient, for atomic-to-an-observer.
 
 ## Common pitfalls
 

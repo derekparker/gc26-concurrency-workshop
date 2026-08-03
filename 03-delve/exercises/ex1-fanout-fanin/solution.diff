@@ -1,0 +1,18 @@
+diff --git i/03-delve/exercises/ex1-fanout-fanin/main.go w/03-delve/exercises/ex1-fanout-fanin/main.go
+index d52a03c..e2e47f8 100644
+--- i/03-delve/exercises/ex1-fanout-fanin/main.go
++++ w/03-delve/exercises/ex1-fanout-fanin/main.go
+@@ -62,11 +62,9 @@ func (s *Stats) Record(eventID, severity int) {
+ 	}
+ }
+ 
+-// noteCritical remembers critical event IDs so the report can list them.
++// noteCritical remembers critical event IDs.
++// Caller must hold s.mu.
+ func (s *Stats) noteCritical(eventID int) {
+-	s.mu.Lock()
+-	defer s.mu.Unlock()
+-
+ 	s.criticalIDs = append(s.criticalIDs, eventID)
+ }
+ 

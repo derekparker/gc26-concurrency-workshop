@@ -205,6 +205,15 @@ correct to use as the amount: reservations only *grow* between snapshot
 and write-back, and releasing only the snapshotted ones is the intended
 semantics. The bug was overwriting `stock` with a stale absolute.
 
+The whole fix is in `solution.diff`, applied from this directory:
+
+```bash
+git apply solution.diff        # snapshot stock discarded, increment instead of overwrite, exactly as above
+```
+
+> Undo it with `git apply -R solution.diff` when you want the drifting
+> version back for the next session.
+
 Verify:
 
 ```bash
@@ -220,17 +229,114 @@ SUCCESS: books balance
 
 - Watchpoints fire on **every** write. What made this program
   stake-out-friendly? What would you do in a system where the hot item
-  gets 1,000 writes/sec? (Conditional watchpoints, watching a rarely-
-  written aggregate, `-r` on a sentinel, sampling by goroutine.)
+  gets 1,000 writes/sec?
+
+  Two things were engineered into this exercise on purpose. First,
+  `numPickers` is only 4, each picker sleeps 5ms per order, so writes to
+  any one item are sparse in real time. Second, `buildOrders` deliberately
+  makes item 5 (the sticker) a slow mover — only five orders touch it in
+  the whole 320-order book (indices 15, 59, 119, 260, 280) — so
+  `watch -w store.stock[5]` fires half a dozen times total, cheap to
+  single-step through by hand. Watch a fast mover like item 0 instead
+  (routed to `k % 5`, four items sharing the bulk of 320 orders) and
+  you're stepping through dozens of legitimate writes before the
+  janitor's write ever shows up — see "Common pitfalls" below.
+
+  At 1,000 writes/sec on the hot item, an unconditional `watch -w` is
+  unusable — you'd spend the session mashing `continue`. The moves: put a
+  `condition` on the watchpoint (it gets an ordinary breakpoint ID, so
+  `condition <id> <expr>` applies same as any breakpoint — e.g. skip hits
+  from goroutines you already know are legitimate pickers); watch a
+  *rarely-written aggregate* instead of the hot field itself — here that
+  would look like adding a `releaseCount`/`lastReleaseAmount` field the
+  janitor alone touches, and watching that instead of `store.stock[5]`
+  directly; use `-r` (read-only) on a sentinel that only the suspect code
+  path touches, when the write itself is too hot but something downstream
+  of it is quiet; or sample by goroutine — break inside the suspect
+  goroutine (the janitor) specifically and inspect state there, rather
+  than watching the shared word every goroutine hammers. The common
+  thread: stop watching what everyone writes, start watching something
+  only the suspect writes.
+
 - The drift (+30) is timing-dependent, but the bug triggers every run.
-  What structural property guarantees that? (Janitor scan = 300ms,
-  pickers ~400ms/batch — overlap is built in.)
+  What structural property guarantees that?
+
+  The janitor's ticker fires every 250ms
+  (`time.NewTicker(250 * time.Millisecond)`, main.go:155), and each call
+  to `releaseExpired` then sleeps 300ms (main.go:83) before writing back —
+  so the snapshot-to-write-back window is at least 300ms long, and the
+  *first* tick always lands at t=250ms. Meanwhile the whole picking phase
+  (320 orders / 4 pickers x 5ms/order) takes roughly 400ms wall-clock to
+  drain the channel. 250ms falls inside that 400ms window, and
+  250+300=550ms lands well past it — so the first `releaseExpired` call is
+  structurally guaranteed to snapshot stock *while pickers are still
+  running* and write it back *after they've finished*, silently erasing
+  whatever sales landed in between. There's no race to win here: the
+  numbers are chosen so the overlap happens on every single run regardless
+  of scheduler luck. Only the *amount* of drift is timing-dependent — how
+  many sales happen to fall inside that particular 250–550ms window, and
+  how many of the items with open reservations get caught in it — which is
+  why the total floats around +30 (item 4 alone varies 96–108) rather than
+  landing on a fixed number.
+
 - Could you have found this with the execution tracer? With logging?
   What's the *minimal* evidence that convicts the janitor, and which
   tool produces it fastest?
-- Why is `-race` silent here? (No happens-before violation. Both the
-  read (snapshot) and the write held the lock. They just didn't hold it
-  *across* the sleep.)
+
+  The execution tracer (`go tool trace`, section 02) shows you *when*
+  goroutines run and block, not what they write. It would show the
+  janitor goroutine parked in `time.Sleep` for 300ms inside
+  `releaseExpired`, and the picker goroutines actively running
+  `Take`/`Reserve` during that same window — real, visible overlap.
+  That's genuinely useful: it tells you *this* goroutine was asleep across
+  a window in which *those* other goroutines mutated shared state, which
+  is the shape of the bug. But it stops at scheduling. The trace view has
+  no idea a `[numItems]int64` snapshot went stale or that a write silently
+  reverted four sales; you'd be staring at overlapping bars and
+  *inferring* a state bug from a timing coincidence, not seeing one
+  directly. To close that gap you'd need to hand-instrument — add a trace
+  region or `trace.Log` call that emits `stock[5]` at snapshot time and
+  again at write-back time — at which point you're doing the watchpoint's
+  job by hand, with extra ceremony.
+
+  Logging has the mirror-image problem. Log every read and write to
+  `store.stock` and at this program's write-rate (four pickers, one write
+  every 5ms apiece, plus a janitor write every scan) you either drown in
+  volume trying to spot the one bad write, or you already suspect
+  `releaseExpired` and add a targeted log line there — in which case
+  you've already solved the case and the log is just confirmation.
+  Logging is a *confirmation* tool once you have a hypothesis; it's a poor
+  *discovery* tool when you don't have one yet.
+
+  The watchpoint beats both because it doesn't ask you to correlate timing
+  with value, or guess what to log — it triggers exactly and only on
+  writes to `store.stock[5]`, and it hands you the stack of the actual
+  offending write (`main.(*Warehouse).releaseExpired`, main.go:93, called
+  from the janitor goroutine) the moment a wrong write happens. That's the
+  minimal evidence that convicts: one hit, one stack trace, no
+  correlation step required. Tracer and logging can corroborate
+  afterward; the watchpoint is what gets you there first.
+
+- Why is `-race` silent here?
+
+  No happens-before violation to find. Every access to `w.stock` and
+  `w.reserved` — the snapshot read in `snapshot()` (main.go:68–72) and the
+  write-back in `releaseExpired` (main.go:85–94) — is taken under `w.mu`,
+  same as every `Take` and `Reserve` call. The race detector's model is
+  per-memory-word: it watches for two accesses to the same address, at
+  least one a write, with no synchronization edge between them. Here every
+  single access *is* synchronized; `mu.Lock`/`Unlock` gives the detector
+  all the happens-before edges it needs, so it has nothing to report.
+
+  What it can't see is that the lock is released and reacquired *across*
+  the 300ms sleep (main.go:79–85), and that the value carried across that
+  gap — the `stock` snapshot — goes stale while unlocked. That's not a
+  synchronization bug, it's a logic bug: correct mutual exclusion around a
+  stale read-modify-write. `-race` checks whether accesses are ordered; it
+  doesn't and can't check whether the *values* you're carrying across an
+  unlock are still true when you use them later. That's exactly the gap a
+  watchpoint fills — it doesn't care about locks at all, it just tells you
+  every time the memory changes, lock or no lock.
 
 ## Common pitfalls
 

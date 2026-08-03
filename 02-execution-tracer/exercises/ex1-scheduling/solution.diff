@@ -1,0 +1,33 @@
+diff --git i/02-execution-tracer/exercises/ex1-scheduling/main.go w/02-execution-tracer/exercises/ex1-scheduling/main.go
+index b8c1c6d..1231eb4 100644
+--- i/02-execution-tracer/exercises/ex1-scheduling/main.go
++++ w/02-execution-tracer/exercises/ex1-scheduling/main.go
+@@ -4,6 +4,7 @@ import (
+ 	"fmt"
+ 	"log"
+ 	"os"
++	"runtime"
+ 	"runtime/trace"
+ 	"slices"
+ 	"sync"
+@@ -49,11 +50,18 @@ func main() {
+ 	// Process the backlog.
+ 	start := time.Now()
+ 	var wg sync.WaitGroup
+-	for i := range numBatches {
++	jobs := make(chan int)
++	for range runtime.GOMAXPROCS(0) {
+ 		wg.Go(func() {
+-			processBatch(i)
++			for id := range jobs {
++				processBatch(id)
++			}
+ 		})
+ 	}
++	for i := range numBatches {
++		jobs <- i
++	}
++	close(jobs)
+ 	wg.Wait()
+ 	elapsed := time.Since(start)
+ 

@@ -245,6 +245,15 @@ s.mu.Unlock()
 This requires moving locking out of `refresh` — the incremental branch still
 wants the lock during its writes.
 
+The whole fix is in `solution.diff`, applied from this directory:
+
+```bash
+git apply solution.diff        # build-outside-the-lock, brief write lock for the swap
+```
+
+> Undo it with `git apply -R solution.diff` when you want the convoy back
+> for the next session.
+
 Verify:
 
 ```bash
@@ -261,15 +270,112 @@ shows ~2s in `RLock`; on the fixed program the profile is dominated by tiny
 mutex contention orders of magnitude smaller.
 
 ## Ask the room
+Answers are for you, not the slides. Let students swing first — the wrong
+answers are the teachable part.
+
 - Why is the snapshot pattern (`fr.WriteTo` on trigger) fundamentally more
   useful than `trace.Start` on a long-running service? What's the ratio of
   bytes shipped to bytes captured?
+
+  `trace.Start`/`Stop` gives you exactly two bad options: run it the whole
+  time (continuous, expensive, and you ship gigabytes of trace for hours of
+  boring steady-state to find the 270ms that mattered), or start it only
+  once you suspect a problem (too late — by the time the dashboard shows
+  the SLO breach, the incident that caused it is long over, and you can't
+  retroactively trace the past). The flight recorder sidesteps the
+  dilemma: it keeps tracing *continuously* into a small ring buffer at
+  near-zero steady-state cost, and only pays the "ship the bytes" cost
+  when `WriteTo` is actually called on trigger. You get the always-on
+  coverage of the first option and the low cost of the second.
+
+  The ratio in this exercise is a bad advertisement for the *number* but a
+  good one for the *shape*: a 12s whole-run trace here is ~1.8 MB and the
+  snapshot is ~0.9 MB — only 2× smaller, because `runFor` is a toy 12s
+  stand-in. The point isn't this run, it's that the snapshot is **bounded
+  by `MinAge`/`MaxBytes` and doesn't grow with uptime**, while the
+  whole-run trace grows linearly forever. Run the same service for an hour
+  at the same trace rate and the whole-run trace is tens of GB; the
+  snapshot is still ~1 MB. That's the real ratio — it's a fixed
+  numerator over a `runFor` that in production is "however long the
+  service has been up," so the ratio itself is unbounded and grows with
+  every hour you don't ship a snapshot.
+
 - Where in the trace do you *see* the convoy — which single view makes the
   eight-way pileup on `RLock` unmistakable?
+
+  If you can only show one view, show **Goroutine analysis**. It's the one
+  place the convoy is quantified rather than merely visible: `worker` has
+  Count 8 and a **Block time (sync)** column of ~255ms per goroutine that
+  has no business being there, next to `refresher`'s single goroutine with
+  ~270ms of *execution*. Put those two rows side by side and the room can
+  do the arithmetic themselves — one goroutine ran for ~270ms, eight
+  others were blocked for almost exactly that long, at the same time. The
+  **View trace by proc** timeline sells the "everything goes quiet" story
+  visually (great for the live-code narrative), but it's the goroutine
+  analysis table that turns "looks quiet" into "8 × 270ms of aggregate
+  blocked-sync wall-clock." And the **synchronization blocking profile**
+  (`-pprof=sync`, `-focus=RWMutex`) is the one that nails the *culprit
+  call site* — `sync.(*RWMutex).RLock` under `main.(*service).handle` —
+  but only once you remember to `-focus`; unfocused it's buried under
+  `chanrecv1`/`selectgo` noise from the ticker goroutines and reads as "the
+  lock isn't the problem," which is the trap worth calling out explicitly.
+
 - The `RWMutex` reads take the "read" lock; why do reads still queue behind
   a write lock at all? (Writer priority: pending writes block new readers.)
+
+  Go's `sync.RWMutex` is deliberately writer-preferring. Once a `Lock()`
+  call is pending, any *new* `RLock()` call blocks until that writer has
+  acquired and released the lock — even though the writer itself hasn't
+  started running yet and even though readers already holding the lock are
+  unaffected and get to finish. This is the fix for the classic RWMutex
+  failure mode: without writer priority, a steady stream of overlapping
+  readers can keep the read-lock count above zero indefinitely and a
+  writer never finds a gap, i.e. writer starvation. Go's implementation
+  trades that away — the moment a writer shows up, it puts a stake in the
+  ground and every reader that arrives afterward queues up behind it,
+  guaranteeing the writer gets in within one "generation" of readers.
+
+  That's exactly the mechanism that produces the convoy shape you see in
+  this exercise: the eight workers aren't fighting each other for the read
+  lock — read locks are cheap to share — they're all piling up *behind
+  the one pending writer* (the refresher's full revalidation), and they
+  all get released together the instant that writer's `Unlock()` runs.
+  That's why the trace shows a stacked pileup that resolves all at once
+  rather than a slow trickle: writer-preference batches the readers into a
+  single wave.
+
 - What would you set `MinAge` and `MaxBytes` to for your own service, and
   what data would inform those numbers?
+
+  This is a discussion question, not a lookup — pose it to the room and
+  let them reason from their own service's shape. The framework:
+
+  - `MinAge` should be roughly 2× the window you actually need to analyze
+    an incident (that's the Go blog's own guidance, and it's what TODO 1's
+    comment repeats). Ground it in "how far back would I need to look to
+    see the *start* of a typical slow request or incident in my service,"
+    not a round number picked in the abstract. If your incidents build up
+    over 5–10s (a GC pause cascading, a lock convoy warming up), you want
+    `MinAge` to comfortably straddle that, so the trigger — which fires
+    *after* the slow request is already detected — still has the run-up in
+    the ring buffer.
+  - `MaxBytes` should be sized against two numbers you have to actually go
+    measure, not guess: (1) your service's real trace production rate
+    under production load — the Go blog's own ballpark is 2–10 MB/s for a
+    busy service, but that varies hugely with goroutine count and
+    scheduling churn, so measure it with a short `trace.Start` capture
+    under load rather than trusting the ballpark; and (2) the memory
+    budget you're willing to spend per instance, multiplied by however
+    many instances you run — a snapshot ring buffer that's fine on one pod
+    becomes a real memory line item across a fleet of thousands.
+    `MaxBytes` always wins over `MinAge` when they conflict (both are
+    hints, but the byte cap is the hard one), so undersizing it silently
+    shrinks your actual window below what `MinAge` promised.
+  - The honest answer for *this* exercise's numbers (`MinAge: 5s`,
+    `MaxBytes: 16 MiB`) is that they were picked to comfortably cover a
+    12s toy run, not derived from a measured production trace rate — say
+    that out loud if asked, it's a good moment to distinguish "numbers
+    that make the demo work" from "numbers you'd actually ship."
 
 ## Common pitfalls
 - **The `sync.Once` and the extra goroutine are the whole lesson.** If

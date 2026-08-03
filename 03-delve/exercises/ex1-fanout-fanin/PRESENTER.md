@@ -156,6 +156,15 @@ func (s *Stats) noteCritical(eventID int) {
 }
 ```
 
+The whole fix is in `solution.diff`, applied from this directory:
+
+```bash
+git apply solution.diff        # drop noteCritical's own Lock/Unlock, document the invariant
+```
+
+> Undo it with `git apply -R solution.diff` when you want the stalling
+> version back for the next session.
+
 Verify:
 
 ```bash
@@ -176,15 +185,126 @@ invariants aren't clear.
 
 ## Ask the room
 
+Answers are for you, not the slides. Let students swing first — the
+wrong answers are the teachable part.
+
 - The stall always fires at event 36 (the first FATAL). What made this
   deterministic, and how much harder would a probabilistic trigger be
   to debug?
+
+  `generateEvents` is a pure function of the loop index `i` — no
+  randomness, no clock, no environment input. The severity of event `i`
+  is decided entirely by `i%37`, `i%11`, `i%7`, checked in that order,
+  so `i%37==36` (the `SevCritical`/`FATAL` branch) is baked into the
+  input stream before a single goroutine runs. The lowest `i` for which
+  that's true is 36, full stop — that's arithmetic, not scheduling.
+  Every run generates the exact same 200-event slice, so the first call
+  that ever takes the `noteCritical` path is unconditionally event 36,
+  regardless of which of the 8 workers happens to pull it off the
+  channel or how the runtime interleaves them. The only thing goroutine
+  scheduling still gets to influence is the cosmetic "32–40" range on
+  the last `[MONITOR]` line — how many *other* in-flight events finish
+  being recorded/collected before every worker eventually piles up
+  behind the wedged mutex — not whether or where the deadlock triggers.
+  That's why the Root cause section is careful to say "don't quote a
+  specific number on stage" for the monitor count, but is happy to
+  commit to "36" for the trigger.
+
+  A probabilistic trigger (a real timing-window data race, say) would
+  be substantially harder: you couldn't set a conditional breakpoint on
+  `eventID == 36` and trust it, because there's no fixed index to break
+  on — the bug depends on OS scheduler decisions, core placement, and
+  contention that vary run to run. You'd need statistical tools instead
+  of a single `dlv debug` session: looped runs (`go test -race
+  -count=1000`), `-race`'s own instrumentation to widen the collision
+  window, or fleet-scale sampling (the goroutine leak profile in the
+  stretch goal is exactly that move). Worse, attaching a debugger or
+  even adding a `fmt.Println` changes timing enough to sometimes make
+  the bug disappear on the very run you're trying to catch it on — the
+  debugging tool perturbs the thing it's trying to observe. Determinism
+  here is a gift; don't let students assume real deadlocks are always
+  this polite.
+
 - `pgrep`+attach vs `Ctrl+C` on a live Delve session — when do you have
   a choice, and when don't you?
+
+  Both are in the Reproduce section for a reason — they answer
+  different starting conditions, not the same one. `dlv debug` +
+  `continue` + `Ctrl+C` only works because Delve *launched* the process
+  and owns its controlling terminal: SIGINT is trapped by Delve itself
+  and drops you back to the `(dlv)` prompt instead of killing the
+  target. You have that choice whenever you can afford to start the
+  program under the debugger from a cold boot — local dev, CI, or (like
+  this exercise) any bug with a cheap, deterministic repro, since
+  relaunching costs you nothing.
+
+  You don't have that choice — and need `go build -gcflags='all=-N -l'`
+  + `./ingest &` + `dlv attach $(pgrep ingest)` instead — whenever the
+  process is already running and wasn't started under `dlv debug`:
+  it's deployed, someone else started it, it's been up for hours and
+  accumulated state you can't casually reproduce, or it's running
+  detached/under a supervisor where a stray SIGINT would just restart
+  it instead of reaching a debugger that isn't there. The general rule:
+  attach when stopping-and-relaunching would destroy the exact
+  goroutine state you're trying to inspect (any live incident, any
+  non-deterministic bug); use the `Ctrl+C` path only when restart is
+  free and the trigger is repeatable on demand.
+
 - If this were a real service, what would you `dump` before fixing and
   restarting? Who reads the dump, and where?
+
+  Two tools are already sitting in this exercise for exactly this.
+  Delve's `dump <path>` command (available once you're attached)
+  writes a full core-dump-style snapshot — every goroutine stack, the
+  heap, globals — to disk without requiring you to keep the process
+  alive or keep your debugger session open. Separately, `main.go`
+  already wires up `net/http/pprof` behind `INGEST_DEBUG_ADDR`, so
+  `curl .../debug/pprof/goroutine?debug=2` gets you full stacks for
+  every blocked goroutine — the mutex holder, the 8 waiters, the feeder,
+  the collector, the `wg.Wait` goroutine — with no debugger attached at
+  all, which is the version that survives being scripted into an
+  incident runbook.
+
+  Grab one of these *before* you kill `-9` and restart, because restart
+  destroys the only copy of the state that explains the incident. Who
+  reads it: usually not you, not right now — an SRE or on-call engineer
+  triaging the page reads the goroutine dump live to decide "restart or
+  keep digging," and the original code owner reads the full core dump
+  offline, hours or days later, reloaded with `dlv core <binary>
+  <dumpfile>` (or the pprof profile via `go tool pprof`) once the
+  incident is over and nobody remembers the exact conditions anymore.
+  The dump *is* the memory of the incident.
+
 - Why is `-race` silent here? Whose model of the bug does the race
   detector match, and whose does it miss?
+
+  Because there genuinely is no data race to find. Look at the actual
+  accesses: `s.bySeverity` is only ever touched inside `Record` while
+  `s.mu` is held; `s.criticalIDs` is only ever touched inside
+  `noteCritical`, which is only ever called from inside `Record`, which
+  already holds `s.mu` at that point. From a pure memory-access point of
+  view — the only thing `-race` instruments — every read and write to
+  shared state in this program happens under a consistently-held lock.
+  No two goroutines ever race on the same address; the race detector's
+  vector-clock/happens-before machinery finds nothing to report because
+  there is nothing to report, by that definition.
+
+  The bug isn't in *what* touches shared memory, it's in the *call
+  graph*: the same goroutine asks for a lock it's already holding, which
+  is a control-flow property, not a memory-safety property. `-race`'s
+  model is "did two goroutines access the same word without a
+  happens-before edge between them" — a safety property about
+  concurrent memory access. It has no model at all for liveness — "does
+  every goroutine eventually make progress" — which is what a
+  self-deadlock actually violates. So `-race` matches the model of
+  someone reasoning "is my shared state protected by a lock?" (yes,
+  technically, on every single access) and completely misses the model
+  of someone reasoning "does this call chain end up requesting a lock
+  the caller already holds?" — which is exactly what reading the stack
+  trace in the Walkthrough (two `sync.(*Mutex).Lock` frames on one
+  goroutine) catches immediately and diff review or `-race` never would.
+  Same point the Common pitfalls section makes: different tool, different
+  bug class.
 
 ## Common pitfalls
 

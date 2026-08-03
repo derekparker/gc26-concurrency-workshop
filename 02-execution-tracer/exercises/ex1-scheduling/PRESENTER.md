@@ -129,6 +129,15 @@ wg.Wait()
 
 Add `"runtime"` to the imports.
 
+The whole fix is in `solution.diff`, applied from this directory:
+
+```bash
+git apply solution.diff        # bounded worker pool sized to GOMAXPROCS, exactly as above
+```
+
+> Undo it with `git apply -R solution.diff` when you want the unbounded
+> goroutine-per-batch version back for the next session.
+
 Verify:
 
 ```bash
@@ -162,16 +171,85 @@ throughput buys the heartbeat ~15ms p99. That's a *knob you can now justify* wit
 trace screenshots.
 
 ## Ask the room
+Answers are for you, not the slides. Let students swing first — the wrong
+answers are the teachable part.
+
 - What in the trace told you the heartbeat wasn't slow, it wasn't *running*?
   (Answer: `Sched wait time` and the Runnable state — the tracer's whole
-  differentiator.)
+  differentiator.) A CPU profile only samples time spent *executing* — if a
+  goroutine never gets a P, it never shows up as a hot function, it just
+  doesn't show up at all. That's why the logs and a profiler both point at
+  `processBatch` and nothing points at `heartbeat`. The trace viewer tracks a
+  goroutine's *state*, not just its execution: `main.heartbeat`'s
+  Goroutine analysis row splits time into Execution (~hundreds of µs — it
+  barely does any work), Block time on `<-ticker.C` (~1s — legitimate,
+  expected), and Sched wait time (often >1s). Sched wait time is time spent
+  `Runnable` — the goroutine has work to do and is sitting in a run queue,
+  not blocked on anything, just waiting for a P to pick it up. That third
+  bucket is the tell: the heartbeat isn't slow to execute and it isn't
+  stuck waiting on I/O or a channel, it's ready and nobody will run it. No
+  profiler built around "where did the CPU go while things were running"
+  can see a goroutine that was never running in the first place.
+
 - Why does adding more goroutines make the tail worse, not better, here?
   (Fair scheduling: every runnable G shares a P; latency-sensitive Gs pay
-  the same queue tax as CPU-hungry ones.)
+  the same queue tax as CPU-hungry ones.) Go's scheduler doesn't know or
+  care that `heartbeat` is latency-sensitive and `processBatch` isn't —
+  every `Runnable` G is just an entry in a run queue, and the scheduler
+  round-robins them fairly across however many P's `GOMAXPROCS` gives it,
+  preempting each one after roughly a 10ms quantum. With 1000
+  `processBatch` goroutines and 8 P's, that's ~125 CPU-bound Gs queued
+  behind each P at the worst case. When the heartbeat's ticker fires and it
+  transitions to `Runnable`, it doesn't jump the line — it goes to the back
+  of whichever queue it lands on, behind however many batch goroutines
+  happen to be ahead of it. More goroutines means a longer queue means a
+  longer wait for the *same* fair-share turn, even though the heartbeat
+  only needs microseconds once it actually gets a P. Fairness at the
+  goroutine level is exactly what produces unfairness at the
+  request/deadline level when the workload mixes a huge number of
+  CPU-bound units with one latency-sensitive one — there's no priority
+  lane, so throwing more concurrent work at the same P's only lengthens
+  everyone's queue, including the goroutine that can least afford it.
+
 - Where else in your code do you have "one goroutine per work item"? What
-  size is the work-item queue at peak?
+  size is the work-item queue at peak? This is the general anti-pattern:
+  `go handleRequest(r)` per incoming HTTP request, a goroutine per Kafka
+  message, per row in a batch job, per WebSocket frame — anywhere fan-out
+  is sized to the *workload* instead of to the *hardware*. It looks fine
+  under light load because there's always a free P, and it silently turns
+  into exactly this exercise's bug the moment load spikes: thousands of
+  runnable goroutines queued behind a fixed number of P's, and anything
+  latency-sensitive sharing those P's (a heartbeat, a health check, a
+  request deadline, GC-sensitive work) pays a queue tax nobody budgeted
+  for. The fix is the same shape every time — bound the number of
+  concurrent workers to something tied to actual capacity (`GOMAXPROCS` for
+  CPU-bound work, a pool sized to a downstream connection limit for
+  I/O-bound work) and feed them from a queue/channel, so the number of
+  runnable Gs competing for a P is a constant you chose, not a function of
+  how much work showed up. Push the room to actually go look: grep their
+  own services for `go func` inside a request handler or a consumer loop
+  with no semaphore or worker pool around it, and ask what the queue depth
+  looks like at their real peak load, not their test load.
+
 - The fix leaves throughput unchanged. What does that tell you about the
-  cost of goroutines vs. the cost of contention for CPUs?
+  cost of goroutines vs. the cost of contention for CPUs? It isolates where
+  the cost actually lives. Spawning 1000 goroutines vs. 8 doesn't move
+  total wall-clock time for the batch work at all — same "wall of blue" on
+  the by-proc view, same ~3.1–3.2s either way — because a goroutine's own
+  overhead (a few KB of stack, a scheduler struct) is cheap and mostly
+  irrelevant once you have enough of them to keep every P busy. What's
+  expensive isn't the goroutines existing, it's *contention for the fixed
+  number of P's/OS threads* that actually run code — and that contention
+  cost doesn't show up as slower total throughput, it shows up as queueing
+  delay distributed unfairly across whichever goroutines happen to be
+  waiting, which is invisible to a throughput number and devastating to a
+  tail-latency number. The worker-pool fix doesn't reduce the total amount
+  of CPU work Go has to schedule; it just stops manufacturing thousands of
+  redundant `Runnable` entries that all have to take a turn before the one
+  that matters gets to run. That's the reframe worth landing: "more
+  goroutines" was never buying anything here — the CPU budget was already
+  saturated at 8 P's — it was only making the scheduler's fairness policy
+  work against the goroutine that needed to jump the queue.
 
 ## Common pitfalls
 - **Don't skip running the program multiple times.** The bug is

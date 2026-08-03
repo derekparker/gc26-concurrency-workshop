@@ -1,0 +1,45 @@
+diff --git i/01-race-detector/exercises/ex3-banking/main.go w/01-race-detector/exercises/ex3-banking/main.go
+index 3e4d99e..f76c846 100644
+--- i/01-race-detector/exercises/ex3-banking/main.go
++++ w/01-race-detector/exercises/ex3-banking/main.go
+@@ -58,8 +58,8 @@ func (b *Bank) GetBalance(id int) int {
+ // adds or removes accounts, a read lock on the map is sufficient and lets
+ // transfers run in parallel.
+ func (b *Bank) Transfer(fromID, toID, amount int) bool {
+-	b.mu.RLock()
+-	defer b.mu.RUnlock()
++	b.mu.Lock()
++	defer b.mu.Unlock()
+ 
+ 	from, ok1 := b.accounts[fromID]
+ 	to, ok2 := b.accounts[toID]
+@@ -111,7 +111,7 @@ func (b *Bank) TotalBalance() int {
+ 
+ // LargestAccount returns the account with the highest balance, for the
+ // end-of-day VIP report.
+-func (b *Bank) LargestAccount() *Account {
++func (b *Bank) LargestAccount() Account {
+ 	b.mu.RLock()
+ 	defer b.mu.RUnlock()
+ 
+@@ -121,7 +121,10 @@ func (b *Bank) LargestAccount() *Account {
+ 			largest = account
+ 		}
+ 	}
+-	return largest
++	if largest == nil {
++		return Account{}
++	}
++	return *largest
+ }
+ 
+ // teller processes a stream of random transfers.
+@@ -154,7 +157,7 @@ func vipReporter(bank *Bank, done chan struct{}) {
+ 		select {
+ 		case <-ticker.C:
+ 			vip := bank.LargestAccount()
+-			if vip != nil {
++			if vip.ID != 0 {
+ 				fmt.Printf("[VIP report] %s (account %d) leads with balance %d\n",
+ 					vip.Owner, vip.ID, vip.balance)
+ 			}

@@ -1,0 +1,30 @@
+diff --git i/03-delve/exercises/ex2-dispatcher/main.go w/03-delve/exercises/ex2-dispatcher/main.go
+index f4d30aa..8f2898b 100644
+--- i/03-delve/exercises/ex2-dispatcher/main.go
++++ w/03-delve/exercises/ex2-dispatcher/main.go
+@@ -73,15 +73,18 @@ func main() {
+ 		go worker(i, jobs, reports)
+ 	}
+ 
+-	// Phase 1: dispatch the whole batch.
++	// Dispatch and collect concurrently: dispatch runs in its own goroutine
++	// so the collect loop below is already draining reports while it works,
++	// instead of waiting for dispatch to finish first.
+ 	log.Printf("dispatching %d jobs", len(batch))
+-	for _, job := range batch {
+-		jobs <- job
+-		log.Printf("dispatched job %d (%s)", job.ID, job.Target)
+-	}
+-	close(jobs)
++	go func() {
++		for _, job := range batch {
++			jobs <- job
++			log.Printf("dispatched job %d (%s)", job.ID, job.Target)
++		}
++		close(jobs)
++	}()
+ 
+-	// Phase 2: gather all the reports.
+ 	log.Printf("gathering reports")
+ 	for range batch {
+ 		r := <-reports

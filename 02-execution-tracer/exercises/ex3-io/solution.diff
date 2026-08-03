@@ -1,0 +1,34 @@
+diff --git i/02-execution-tracer/exercises/ex3-io/main.go w/02-execution-tracer/exercises/ex3-io/main.go
+index 97a630f..3fadef6 100644
+--- i/02-execution-tracer/exercises/ex3-io/main.go
++++ w/02-execution-tracer/exercises/ex3-io/main.go
+@@ -109,23 +109,22 @@ func worker(ctx context.Context, apiURL string, jobs <-chan int, results chan<-
+ 		trace.WithRegion(ctx, "fetch", func() {
+ 			rec = fetch(apiURL, id)
+ 		})
++		trace.WithRegion(ctx, "compress", func() {
++			rec.body = compress(rec)
++		})
+ 		trace.WithRegion(ctx, "send result", func() {
+ 			results <- rec
+ 		})
+ 	}
+ }
+ 
+-// collector compresses each record and appends it to the archive.
+-// Compression is CPU work, ~25ms per record.
++// collector appends each already-compressed record to the archive. This is
++// the one stage that must stay serial: a single writer, order-insensitive.
+ func collector(ctx context.Context, archive *os.File, results <-chan record, wg *sync.WaitGroup) {
+ 	defer wg.Done()
+ 	for rec := range results {
+-		var compressed []byte
+-		trace.WithRegion(ctx, "compress", func() {
+-			compressed = compress(rec)
+-		})
+ 		trace.WithRegion(ctx, "append to archive", func() {
+-			if _, err := archive.Write(compressed); err != nil {
++			if _, err := archive.Write(rec.body); err != nil {
+ 				log.Fatal(err)
+ 			}
+ 		})

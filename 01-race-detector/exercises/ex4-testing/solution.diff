@@ -1,0 +1,97 @@
+diff --git i/01-race-detector/exercises/ex4-testing/ttlcache.go w/01-race-detector/exercises/ex4-testing/ttlcache.go
+index 2eaf33e..8cacf98 100644
+--- i/01-race-detector/exercises/ex4-testing/ttlcache.go
++++ w/01-race-detector/exercises/ex4-testing/ttlcache.go
+@@ -5,6 +5,7 @@ package ttlcache
+ 
+ import (
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ )
+ 
+@@ -21,8 +22,8 @@ type Cache struct {
+ 
+ 	// Stats: hits/misses are recorded on the Get path, swept counts
+ 	// entries removed by the janitor.
+-	hits   int
+-	misses int
++	hits   atomic.Int64
++	misses atomic.Int64
+ 	swept  int
+ 
+ 	done chan struct{}
+@@ -55,10 +56,10 @@ func (c *Cache) Get(key string) (string, bool) {
+ 	defer c.mu.RUnlock()
+ 	e, ok := c.entries[key]
+ 	if !ok || time.Now().After(e.expiresAt) {
+-		c.misses++ // stats only, and we hold the lock, so this is safe
++		c.misses.Add(1)
+ 		return "", false
+ 	}
+-	c.hits++
++	c.hits.Add(1)
+ 	return e.value, true
+ }
+ 
+@@ -75,7 +76,7 @@ func (c *Cache) Len() int {
+ func (c *Cache) Stats() (hits, misses, swept int) {
+ 	c.mu.RLock()
+ 	defer c.mu.RUnlock()
+-	return c.hits, c.misses, c.swept
++	return int(c.hits.Load()), int(c.misses.Load()), c.swept
+ }
+ 
+ // Close stops the janitor goroutine.
+diff --git i/01-race-detector/exercises/ex4-testing/ttlcache_test.go w/01-race-detector/exercises/ex4-testing/ttlcache_test.go
+index b64ffec..b5d95c8 100644
+--- i/01-race-detector/exercises/ex4-testing/ttlcache_test.go
++++ w/01-race-detector/exercises/ex4-testing/ttlcache_test.go
+@@ -4,6 +4,7 @@ import (
+ 	"fmt"
+ 	"sync"
+ 	"testing"
++	"testing/synctest"
+ 	"time"
+ )
+ 
+@@ -116,5 +117,38 @@ func TestExpiryAndSweep_RealClock(t *testing.T) {
+ // TestExpiryAndSweep_RealClock, verified inside a testing/synctest bubble —
+ // instant, deterministic, and exact to the millisecond. See the README.
+ func TestExpiryAndSweep_Synctest(t *testing.T) {
+-	t.Skip("TODO: rewrite TestExpiryAndSweep_RealClock using synctest.Test")
++	synctest.Test(t, func(t *testing.T) {
++		c := New(1*time.Second, 2*time.Second) // MUST be inside the bubble
++		defer c.Close()
++
++		c.Set("greeting", "hello")
++
++		// 1ms before the TTL: still live. No slack — the fake clock
++		// advances exactly as far as we tell it to.
++		time.Sleep(999 * time.Millisecond)
++		if _, ok := c.Get("greeting"); !ok {
++			t.Fatal("entry should still be live 1ms before the TTL")
++		}
++
++		// 2ms later (t = ttl+1ms): expired, but not swept yet.
++		time.Sleep(2 * time.Millisecond)
++		if _, ok := c.Get("greeting"); ok {
++			t.Fatal("entry should have expired 1ms after the TTL")
++		}
++		if got := c.Len(); got != 1 {
++			t.Fatalf("Len() = %d, want 1 (expired but not swept yet)", got)
++		}
++
++		// Advance past the janitor's 2s tick, then wait for the bubble
++		// to go quiet so the sweep has definitely finished.
++		time.Sleep(1 * time.Second) // now at t ≈ 2.001s
++		synctest.Wait()
++
++		if got := c.Len(); got != 0 {
++			t.Fatalf("Len() = %d, want 0 (janitor should have swept)", got)
++		}
++		if _, _, swept := c.Stats(); swept != 1 {
++			t.Fatalf("Stats() swept = %d, want 1", swept)
++		}
++	})
+ }

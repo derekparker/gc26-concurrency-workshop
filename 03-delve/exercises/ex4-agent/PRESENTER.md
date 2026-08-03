@@ -219,18 +219,113 @@ live demo misbehaves, show the transcript.
 
 ## Ask the room
 
+Answers are for you, not the slides. Let students swing first — the wrong
+answers are the teachable part.
+
 - The agent replayed `info threads` + N × `context` to reproduce your
   `goroutines -group userloc`. What's the operational cost of that
   difference at 400 goroutines?
+
+  Two separate costs, and it's worth naming both. The first is wall-clock:
+  `goroutines -group userloc` is one CLI invocation with grouping built in —
+  Delve does the bucketing locally and hands you back N call sites, not N
+  goroutines. The agent has no such primitive. `info threads` gets you the
+  list, then it's `context` once per goroutine of interest — at 400
+  goroutines that's potentially 400 round-trips, and each one is a model
+  turn plus a DAP request/response, not a free function call. That's easily
+  minutes of latency for something that took you a few hundred milliseconds
+  by hand. Second, and arguably worse: there's no query language underneath
+  any of it. You can ask `dlv` "show me only the ones blocked on
+  `chansend`"; the agent can't ask DAP that question at all — it has to
+  fetch every goroutine's context and do the filtering itself, in its own
+  reasoning, which burns both tool calls and context window. The gap isn't
+  linear either — grouping turns an O(N) survey into an O(distinct call
+  sites) one, and at 400 goroutines those numbers can be very different.
+
 - `evaluate` renders a channel as `chan main.Job 4/4`. What did you get
   from `print jobs` in ex2 that the agent didn't have? (Full `hchan`
   struct: `sendq`/`recvq` membership, `qcount`, `dataqsiz`, buffer
   contents.) Which of those questions could the agent *reconstruct*
   from other tool calls, and which could it not?
+
+  Be precise about what `evaluate` actually hands back: a type and a
+  count/capacity pair, `4/4`. That's it — Delve's default rendering for a
+  channel value. `print jobs` in ex2 walked the real runtime `hchan`
+  struct, which is a lot more than a summary: `qcount` and `dataqsiz` (which
+  is where `4/4` comes from — so that part isn't lost), plus `sendq` and
+  `recvq`, the actual linked lists of parked goroutines waiting to send or
+  receive, and the raw buffer contents.
+
+  Reconstructability splits cleanly in two. The buffer contents the agent
+  *can* get — Beat 5 shows it working: evaluate `jobs.buf` directly with a
+  valid `frameId` and you get the same `*[4]main.Job` array `print jobs`
+  would show you, because that's just another expression in scope. But
+  `sendq`/`recvq` membership — which specific goroutines are parked on this
+  channel — the agent cannot reconstruct through `evaluate` at all. There's
+  no expression that hands back "the goroutines waiting on this channel."
+  The only way to get an equivalent fact is indirect: go goroutine by
+  goroutine with `context`, look at which ones are sitting in
+  `runtime.chansend` or `runtime.chanrecv`, and infer from the call stack
+  which channel each one is blocked on. That's exactly the N-times-`context`
+  tax from the first question, applied to a narrower query — you're
+  rebuilding one field of `hchan` by brute-force cross-referencing instead
+  of reading it directly.
+
 - What's the value of the `"do not read any files"` constraint in the
   prompt? What would you learn about the agent by removing it?
+
+  It's the whole demo, really — the doc says as much up front: that
+  constraint plus "only the debugger tools" forces the agent to reason from
+  the live process instead of pattern-matching on source. It's the same
+  discipline the room just practiced by hand for three exercises: you don't
+  get to read a comment that says "this blocks here," you have to stop the
+  process and look. Without it, an agent with a file-read tool has a much
+  easier path available — read `main.go`, see `numWorkers=3` and
+  `cap(jobs)=4`, do the arithmetic in its head, and produce a *correct*
+  writeup that never touched the debugger meaningfully. That answer would
+  look identical to the grounded one in the final report, which is exactly
+  the trap: you'd have no way to tell, from the writeup alone, whether the
+  agent actually understood `sendq`/`recvq` or just did static analysis and
+  narrated debugger calls it didn't need.
+
+  Removing the constraint would tell you something real, just not what you
+  want from this exercise. You'd likely see it converge faster — reading
+  source is cheaper than N round-trips of `context` — but with a much
+  weaker evidence chain: fewer tool calls, more claims that trace back to
+  "I read line 44" instead of "goroutine 36 is parked in `runtime.chansend`
+  at frame 1011." You'd be learning about its code-reading competence, which
+  is a different (and less interesting, for this class) skill than its
+  debugging competence. The constraint is what turns this into a debugger
+  demo instead of a code-review demo.
+
 - Where would you deploy this workflow first: interactive at your desk,
   or headless in CI on hung integration tests? Why?
+
+  Interactive, at your desk, first — and the doc's own "where a human is
+  still faster" list is the reason why. No goroutine query language,
+  shallower channel forensics than `print`, no watchpoints over DAP-via-MCP,
+  and real per-hop latency. Layer on top of that the failure modes this
+  exact exercise documents under Common pitfalls: the agent evaluating with
+  no `frameId` and looping on "unable to evaluate expression," or setting
+  breakpoints in the worker loop and re-hitting them forever. Those are
+  exactly the moments where having a human present to nudge it — "call
+  context first," "clear breakpoints and continue to the fatal error" — is
+  the difference between a five-minute demo and a stuck session burning
+  tool calls with nobody watching.
+
+  Headless-in-CI-on-hung-integration-tests is the higher-value *eventual*
+  target — it's precisely the "3am hung binary" scenario the closing frame
+  gestures at, `debug {mode: "attach", processId: ...}` producing a
+  first-pass triage before anyone's laptop is even open. But that's a
+  harder bar: it requires the known failure modes to be solved *unattended*,
+  with no one there to type the nudge. So the natural rollout order is
+  interactive-with-a-human-nudging now, while those rough edges are still
+  being learned; headless-but-narrow next, scoped to a known class of hangs
+  where you've already seen the agent's failure modes and can guard against
+  them (this exact deadlock shape is a good first candidate, having just
+  watched it work); and broad autonomous CI triage only once you trust the
+  agent to recover from its own frameId and breakpoint-loop mistakes without
+  a human in the loop.
 
 ## Common pitfalls
 

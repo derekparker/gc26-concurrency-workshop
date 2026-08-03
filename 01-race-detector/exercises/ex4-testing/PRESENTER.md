@@ -226,6 +226,15 @@ func TestExpiryAndSweep_Synctest(t *testing.T) {
 }
 ```
 
+The whole fix is in `solution.diff`, applied from this directory:
+
+```bash
+git apply solution.diff        # atomic counters + synctest rewrite, exactly as above
+```
+
+> Undo it with `git apply -R solution.diff` when you want the racy,
+> real-clock version back for the next session.
+
 Verify:
 
 ```bash
@@ -249,18 +258,116 @@ assertions, race-instrumented.
 
 ## Ask the room
 
+Answers are for you, not the slides. Let students swing first — the wrong
+answers are the teachable part.
+
 - Plain `go test` passed for months with a real race in the hot path.
   What does an assertion-based test *fundamentally* miss that `-race`
   catches?
+
+  An assertion checks the *result* of one particular schedule; `-race`
+  checks the *ordering* itself, independent of any single run's outcome.
+  `TestConcurrentAccess` only asserts `Len() == keys` and `hits != 0` — it
+  never asserts an exact hit count, so even a run that loses several
+  `hits++` increments to the race still satisfies both assertions. The race
+  is present on 100% of runs (four goroutines take `RLock` and increment
+  concurrently every single time), but the *value corruption* that would
+  actually fail an assertion is a rare, load-dependent event — and this
+  test's assertions are loose enough that it might never fail one even if
+  it tried. `-race` doesn't care what value came out; it maintains a vector
+  clock per goroutine and shadow state per memory word, and reports the
+  moment two accesses to the same address, at least one a write, have no
+  happens-before edge between them. That's a property of the program's
+  synchronization structure, not of what numbers happened to land this run
+  — which is exactly why it catches what months of green `go test` runs
+  couldn't.
+
 - The racy counters are "just stats" — a lost `hits++` fails no
   assertion. Why fix it anyway? (Recall the section intro: the compiler
   is *allowed* to miscompile racy code.)
+
+  Because "racy but just stats" isn't a real category in the Go memory
+  model — there's no tier of undefined behavior that's cheaper than
+  another. The compiler and CPU generate code assuming *single-threaded*
+  semantics for any access that isn't ordered by a happens-before edge; a
+  racy `c.hits++` gives the compiler license to reorder it, keep the value
+  in a register across iterations, hoist it out of a loop, or fuse/split
+  the load-modify-store however it likes, because from its point of view
+  nothing else could be touching that memory concurrently. Today, on this
+  compiler and this architecture, that license is exercised mildly and you
+  lose an occasional increment. Nothing guarantees it stays mild — the
+  canonical failure mode of this exact class of bug is a racy condition
+  variable (`for !done {}`) getting compiled to `if !done { for {} }`,
+  which doesn't lose a count, it hangs forever. `swept` in this same struct
+  is the contrast case worth pointing at: it's *also* just a stats field,
+  but it's correctly ordered (`Lock` in `sweep`, `RLock` in `Stats`), so it
+  costs nothing extra and buys you out of ever having this conversation
+  about it.
+
 - What does `time.Now()` return inside a synctest bubble? Why is that
   useful?
+
+  A value on the bubble's fake clock, which starts at midnight UTC,
+  2000-01-01, and only advances when every goroutine in the bubble is
+  durably blocked — on `time.Sleep`, a bubble-associated channel or
+  `select`, `sync.WaitGroup.Wait`, or `sync.Cond.Wait`. Nothing about wall
+  time or the host machine's scheduler enters into it: `time.Sleep(1 *
+  time.Second)` returns as soon as the bubble goes quiet, having jumped the
+  clock forward exactly one second and fired any timers due along the way
+  (here, the janitor's ticker). That's what makes the rewritten test both
+  instant *and* exact — it can assert "still live at `ttl-1ms`, expired at
+  `ttl+1ms`" because the fake clock advances precisely as far as told,
+  where the real-clock version could only ever assert "expired sometime in
+  the last 200ms of slack." Same behavior under test, zero wall-clock cost,
+  sharper assertions.
+
 - Why must the `Cache` be created *inside* `synctest.Test`? What happens
   if `New` runs outside and the returned `*Cache` is used inside?
+
+  A goroutine (and any timer it starts) is only associated with the bubble
+  if it's spawned, directly or transitively, from the function passed to
+  `synctest.Test` — or if it operates on a channel or timer that already
+  belongs to the bubble. `New` starts the janitor with `go
+  c.janitor(sweepEvery)` and that goroutine calls `time.NewTicker`; if
+  `New` runs *before* `synctest.Test` is entered, the janitor and its
+  ticker are ordinary real-time citizens, invisible to the bubble's clock
+  and to its "is everyone durably blocked" quiescence check. Then the test
+  body's `time.Sleep` calls fast-forward the *bubble's* clock while the
+  janitor keeps waiting on the *real* one — sleeping past `t=2s` in bubble
+  time does nothing to a ticker that needs two actual wall-clock seconds to
+  fire. This exercise's own common-pitfalls note nails the observed
+  failure mode: the test hangs, or the `Len() == 0` assertion fails
+  forever, because the sweep that's supposed to have happened by then
+  simply hasn't. The fix is mechanical — call `New` from inside the
+  closure passed to `synctest.Test`, as the "MUST be inside the bubble"
+  comment on that line insists — but the *reason* is the association rule,
+  worth saying explicitly: the bubble only governs what it created.
+
 - Delete `defer c.Close()` in the synctest test and rerun. What do you
   see, and why is that a *feature* of synctest?
+
+  An immediate, named failure instead of a silent pass:
+
+  ```
+  panic: deadlock: main bubble goroutine has exited but blocked goroutines remain
+  ...
+  goroutine 8 [select (durable), synctest bubble 1]:
+  ttlcache.(*Cache).janitor(...)
+  ```
+
+  `synctest.Test` requires that when the bubble's main goroutine (the
+  closure you passed in) returns, every other goroutine associated with
+  the bubble has *also* exited — not just be durably blocked, actually
+  gone. Forget `Close`, and the janitor is still parked in its `select`
+  waiting on the ticker or `c.done`; that's exactly the state the bubble
+  refuses to let you walk away from, so it panics and names the leaked
+  goroutine and the line it's blocked on. That's a goroutine-leak detector
+  you get for free, deterministically, on every single test run — not
+  something that only shows up under `go tool pprof` on a production
+  server three weeks after the `Close` call got refactored away. It's also
+  the reason a type with a background goroutine *needs* a `Close`/`Stop`
+  method in the first place: synctest just makes the cost of skipping it
+  visible immediately instead of eventually.
 
 ## Common pitfalls
 

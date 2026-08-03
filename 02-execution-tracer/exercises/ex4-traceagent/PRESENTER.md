@@ -410,16 +410,96 @@ For Stage 2 verification: the MCP `tools/list` response includes both
 behavior. `claude mcp list` shows `gotrace: ✓ connected`.
 
 ## Ask the room
+Answers are for you, not the slides. Let students swing first — the wrong
+answers are the teachable part.
+
 - What's the difference between *Runnable* and *Running* time in this
   output, and why does keeping them separate matter for latency work?
+
+  *Running* is `bRunning` in `analyzer.go` — wall-clock time the goroutine
+  was actually executing on a P. *Runnable* is `bRunnable` — time it was
+  ready to go but had no P/OS thread to run on, i.e. pure scheduler queueing
+  delay. `bucket()` (analyzer.go:150) maps `trace.GoRunning` and
+  `trace.GoRunnable` to two separate buckets precisely so they never get
+  summed into one "wall time" number. A slow request can be slow for two
+  completely different reasons — it's doing real work (high Running) or
+  it's sitting in line for a CPU (high Runnable, from `GOMAXPROCS`
+  contention or too many runnable goroutines) — and those have opposite
+  fixes: optimize the code, versus reduce concurrency or add capacity. The
+  `main.heartbeat` row in the demo output is the whole argument in one line:
+  403µs Running against 1.07s Runnable. If those had been collapsed into one
+  column you'd conclude the heartbeat handler itself was slow and go
+  profiling the wrong code. Keeping them apart is also exactly why ex1's bug
+  was invisible in a CPU profile — a CPU profile only samples *Running*
+  time, and this goroutine was almost never running.
+
 - The analyzer emits ~a few hundred bytes of JSON. The raw trace is
   megabytes. What did you *lose* in the compression, and when would that
   loss bite?
+
+  Concretely, per `analyzer.go`'s `summary()`: goroutines get merged into
+  groups by start function (`gr.Count++`, `gr.Running += ...`), so you keep
+  aggregate durations but lose which *specific* `G` in that group of 1000
+  ran long versus short. `TopBlocking` and `LongestSchedWaits` are both
+  capped at `maxReported = 50` (analyzer.go:32), so a trace with more than
+  50 distinct blocking sites or long waits silently drops the tail — you get
+  the worst 50, not all of them. `siteOf` (analyzer.go:243) collapses a full
+  call stack down to one source line. And the analyzer only looks at
+  `EventStateTransition` on `ResourceGoroutine` (analyzer.go:56-63) — it
+  never touches GC events, heap/memory events, network dial/read timing, or
+  proc-level (`ResourceProc`) transitions that the raw trace also carries;
+  those are explicitly skipped (`skip proc state transitions`). The loss
+  bites whenever the bug needs per-goroutine or per-event resolution rather
+  than a summary: "goroutine 4821 specifically deadlocked at 14:32:07,001"
+  isn't answerable from this JSON, only "the group of goroutines started by
+  X spent a lot of time blocked." If the aggregate numbers look fine but one
+  goroutine out of a thousand is wedged, or the interesting behavior lives
+  in a narrow time window the summary averages away, you have to go back to
+  `go tool trace` on the raw file.
+
 - If you were adding a fourth tool for your agent, what would it be —
   and what would you compute? (Suggest a `timeline(path, goroutine)` or
   `regions(path)` tool.)
+
+  Both suggestions plug the exact gap the previous answer names.
+  `timeline(path, goroutine)` would return the ordered state-transition
+  sequence for one `trace.GoID` — every `from -> to` with timestamps — which
+  is the per-goroutine resolution `analyze_trace` and `top_blocking`
+  deliberately throw away by grouping and aggregating. The natural workflow
+  is: agent calls `analyze_trace`, sees the `LONGEST SCHEDULER WAITS` table
+  name `G1004`, then calls `timeline(path, 1004)` to see exactly what that
+  one goroutine was doing before and after the 2.97s gap — a question the
+  existing two tools structurally can't answer because they only keep
+  aggregates. `regions(path)` would surface `trace.WithRegion`-annotated
+  spans (user-defined logical work units, not raw scheduler states) and
+  their durations — useful the moment your code marks meaningful boundaries
+  like "handle one request" or "run one batch," which the scheduler's
+  Running/Runnable/Blocked/Syscall buckets know nothing about. Either is a
+  legitimate answer; the through-line to push students toward is that a good
+  fourth tool should answer a question the first three structurally cannot,
+  not just slice the same GOROUTINE GROUPS table a different way.
+
 - Where in your own service would a flight-recorder-plus-agent workflow
   pay off *today*? What alert would trip the snapshot?
+
+  Pose it back to the room as a discussion prompt rather than a spec to
+  fill in — the useful part is them mapping it onto their own service. The
+  shape of a good answer: any service with a "some requests are mysteriously
+  slow, no repro, not always" symptom is a candidate — the exact profile
+  ex1/ex2 are built to demonstrate, and the kind of bug that's expensive to
+  reproduce on demand because it depends on load and timing you can't
+  dial up locally. The trigger is whatever already pages you or is close to
+  it: a p99 latency alert, an SLO burn-rate alert, a queue-depth threshold —
+  something cheap to evaluate continuously. On trip, call `fr.WriteTo` (the
+  same detect-then-snapshot pattern ex2's `snapshotOnce.Do` block implements
+  — see ex2's PRESENTER.md) to capture the last few seconds *before* anyone's
+  paged, ship that sub-megabyte file to the agent, and have `analyze_trace` /
+  `top_blocking` run automatically as part of incident triage — by the time
+  a human opens the ticket there's already a computed diagnosis attached,
+  not just a stack of raw traces someone has to remember to go pull. The
+  win over "add more logging" is that this is *ground truth* captured at the
+  moment of the anomaly, not an inference from whatever you thought to log
+  in advance.
 
 ## Common pitfalls
 - **`from == to` transitions.** The tracer re-asserts state at

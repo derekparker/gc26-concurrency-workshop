@@ -234,6 +234,16 @@ Option A is the safer one to type live.
 batch. What happens with batch 13? Buffers move where senders block,
 not whether the program deadlocks.
 
+The whole fix (Option A) is in `solution.diff`, applied from this
+directory:
+
+```bash
+git apply solution.diff        # dispatch moves into a goroutine, main collects concurrently, exactly as above
+```
+
+> Undo it with `git apply -R solution.diff` when you want the deadlocking
+> version back for the next session.
+
 Verify:
 
 ```bash
@@ -252,16 +262,55 @@ job 11, not 12", they fixed it correctly. Count the `finished in` lines.
 ## Ask the room
 
 - The runtime's dump also showed 4 goroutines in `chan send`. What did
-  `print reports` tell you that the dump could not? (Buffer contents,
-  `qcount`/`dataqsiz`, which channel, `sendq`/`recvq` membership — the
-  dump makes you correlate four stacks by hand.)
+  `print reports` tell you that the dump could not? The bare dump gives
+  you four stack traces, all sitting in `runtime.chansend`, and nothing
+  else — you have to read all four, notice they're parked at the same
+  source line, and infer by hand that they're blocked on the same
+  channel. `print reports` hands you the whole `hchan` runtime struct
+  directly: `qcount`/`dataqsiz` tell you it's full without counting
+  anything, the struct identity tells you unambiguously which channel
+  you're looking at, `sendq`/`recvq` are the actual linked lists of
+  parked goroutines (so you know who's waiting and on which side), and
+  `.buf` shows you the buffered values themselves — the specific jobs
+  stuck in the queue, not just a count. The dump is stacks; `print
+  <chan>` is the channel's own bookkeeping, correlated for you.
 - `qcount == dataqsiz` with a populated `sendq` is a signature. So is
   `qcount == 0` with a populated `recvq`. What failure mode does each
-  smell like? (Consumer too slow/dead vs producer too slow/dead.)
+  smell like? A full buffer with senders parked in `sendq` means the
+  channel can't absorb any more — something downstream isn't taking
+  items out fast enough, or at all. That's a consumer that's too slow,
+  dead, or (as in this exercise) simply hasn't started yet. An empty
+  buffer with receivers parked in `recvq` is the mirror image: readers
+  are waiting and nothing is arriving. That's a producer that's too
+  slow, dead, or never got around to producing. Same diagnostic move
+  either way — look at which side is empty and which queue has
+  goroutines in it, and you know which end of the pipe is broken before
+  you've read a line of code.
 - Where in your own systems have you shipped "buffer sized for the
-  typical case"?
+  typical case"? Open it up to the room — queues and channels sized for
+  average load that fall over on a burst, batch job buffers dimensioned
+  for the typical batch that choke on the one-off large run, connection
+  pools tuned for steady traffic that exhaust under a spike, log/event
+  buffers sized for normal volume that block or drop under an incident
+  (exactly when you need them most). The pattern is always the same:
+  the number was picked from an observed typical case, not derived from
+  a worst case, and nobody revisited it when "typical" changed. Ask for
+  real examples — this is usually where the room gets talkative.
 - The original 4-job smoke test passed. What would you change in the test
-  suite to catch this structurally, not by luck?
+  suite to catch this structurally, not by luck? The test happened to pick
+  a batch size that fit inside `cap(jobs) + cap(reports) + numWorkers`, so
+  it never exercised the full-buffer blocking path at all — it passed for
+  the same reason the bug existed: nobody did the arithmetic. Two changes,
+  ideally both: (1) stop hardcoding the job count: parametrize it relative
+  to the buffer sizes and assert at a size that's *guaranteed* to exceed
+  capacity (`jobCount > cap(jobs) + cap(reports) + numWorkers`, not a
+  number that happens to), so the phased-dispatch bug is structurally
+  unable to hide again regardless of what the buffers are resized to; (2)
+  add a deadlock-detection timeout around the test (`go test -timeout`,
+  or a context with a deadline around the run) so if this class of bug
+  reappears, CI fails loudly and fast instead of either hanging the build
+  or — worse — someone "fixing" the flaky hang by shrinking the test back
+  down to a size that avoids it.
 
 ## Common pitfalls
 

@@ -1,0 +1,22 @@
+diff --git i/03-delve/exercises/ex3-inventory/main.go w/03-delve/exercises/ex3-inventory/main.go
+index 761e15d..8f2102a 100644
+--- i/03-delve/exercises/ex3-inventory/main.go
++++ w/03-delve/exercises/ex3-inventory/main.go
+@@ -76,7 +76,7 @@ func (w *Warehouse) snapshot() (stock, reserved [numItems]int64) {
+ // It works from a snapshot so that the (potentially slow) expiry scan
+ // does not hold the warehouse lock while it runs.
+ func (w *Warehouse) releaseExpired() {
+-	stock, reserved := w.snapshot()
++	_, reserved := w.snapshot()
+ 
+ 	// Simulate a slow scan of the reservation ledger (database lookups,
+ 	// expiry timestamp checks, ...).
+@@ -89,7 +89,7 @@ func (w *Warehouse) releaseExpired() {
+ 			continue
+ 		}
+ 		// Return the held units to the shelf and clear the reservation.
+-		w.stock[item] = stock[item] + reserved[item]
++		w.stock[item] += reserved[item]
+ 		w.reserved[item] -= reserved[item]
+ 	}
+ }

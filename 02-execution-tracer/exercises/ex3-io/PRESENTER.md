@@ -183,6 +183,15 @@ for rec := range results {
 Note that `record.body` is now the compressed bytes — the `collector` no
 longer needs a separate `compressed` variable.
 
+The whole fix is in `solution.diff`, applied from this directory:
+
+```bash
+git apply solution.diff        # compress moves into worker; collector just appends
+```
+
+> Undo it with `git apply -R solution.diff` when you want the serial-collector
+> version back for the next session.
+
 Verify:
 
 ```bash
@@ -204,24 +213,59 @@ Before/after in the viewer — open `io.trace` from both runs:
 - **User regions**: `send result` distribution flattens to microseconds.
 
 ## Ask the room
+
+Answers are for you, not the slides. Let students swing first — the wrong
+answers are the teachable part.
+
 - What in the trace *first* pointed at the collector, not the workers?
-  (The `main.collector`: 1 with 5.0s execution time in Goroutine
-  analysis.)
+  (The `main.collector`: 1 with 5.0s execution time in Goroutine analysis —
+  that table is the first thing on the landing page, and it takes zero
+  timeline interpretation: it's a sorted list of goroutines by total
+  execution time, with one entry at 5.0s sitting next to an 8-worker group
+  averaging 6–8ms each. That falsifies "8-way parallel pipeline" before
+  anyone has looked at a single timeline pixel. Compare that to the
+  proc-view: the interesting first 30ms is 0.6% of the trace and easy to
+  scroll past, and "empty P rows" only reads as a clue once you already
+  suspect where to look. The goroutine table needs no hypothesis at all —
+  it just states that 99.8% of execution time is in one goroutine.)
 - Why did buffering the channel not help? Where did the bottleneck go?
-  (Nowhere, and the trace says so precisely. The *workers* stop blocking:
-  `runtime.chansend1` in the sync profile drops from ~38.7s to ~0.75s, they
-  now hand off into a buffer and move on. Throughput is identical, 5.05s and
-  39.6 rec/s, because the ceiling was never the handoff; it's the
-  collector's serial 25ms `compress` per record. All the buffer did was move
-  the queue from "senders parked on a channel" to "records sitting in a
-  buffer", and push main's wait into `WaitGroup.Wait`. A queue in front of a
-  serial stage is still a serial stage.)
+  (Nowhere, and the trace says so precisely. Buffering only changes where
+  the queue sits. Measured on this exercise: unbuffered, `runtime.chansend1`
+  carries ~38s of cumulative delay under `main.worker`; switch to
+  `make(chan record, 200)` and that number collapses to well under a
+  second, because workers now hand off into a buffer and move on instead of
+  parking on the send. But wall time barely moves — ~5.05s at ~39.6 rec/s
+  either way — because the sender's wait was never the ceiling. The ceiling
+  is the collector's serial 25ms `compress` per record: 200 records × 25ms
+  = 5s of unavoidable single-goroutine work, full stop. All buffering did
+  was relocate the wait: it used to show up as workers blocked in
+  `chansend1`; now it shows up as `main` blocked in `collectorWG.Wait()`,
+  watching the collector drain a full buffer at the same 40 records/sec it
+  always could. A queue in front of a serial stage is still a serial
+  stage — you've just made the queue longer and moved it to a different
+  goroutine.)
 - What's the general shape of "hidden serialization" on the timeline?
-  (A staircase: one goroutine running back-to-back slices while others
-  sit idle.)
+  (A staircase: one goroutine (or one P) running back-to-back execution
+  slices with no gaps, while every other row is mostly blank punctuated by
+  tiny slivers — those slivers are the other goroutines doing their fast
+  share of work and then blocking. A healthy parallel stage looks the
+  opposite: many rows filled with interleaved, overlapping colored blocks.
+  The shape generalizes past channels — a mutex-guarded section, a
+  connection pool of size 1, a single DB writer all draw the same
+  staircase, because the diagnostic is about wall-clock occupancy of one
+  execution context, not about which primitive caused it.)
 - Which stages in this pipeline are *legitimately* serial and why?
-  (`archive.Write` — order-insensitive here, but must be single-writer;
-  everything else is safely parallelizable.)
+  (`archive.Write` — not because it's slow (it's µs), but because it's a
+  single `*os.File`: unsynchronized concurrent writes to the same fd can
+  interleave bytes, so it needs one writer, and this archive format happens
+  not to care about record order. `fetch` and `compress` share no state
+  across records — each only touches its own `record` value — so both are
+  embarrassingly parallel; the original code already had `fetch` right, and
+  the fix just extends the same reasoning to `compress`. Worth saying out
+  loud: once compression moves into the workers, records land in the
+  archive in whatever order they finish, not id order — harmless here only
+  because "order-insensitive" was true from the start, and worth a second
+  look before making the same move on a real system.)
 
 ## Common pitfalls
 - **Don't skip the "add workers" experiment.** Watching 32 workers make

@@ -1,0 +1,35 @@
+diff --git i/02-execution-tracer/exercises/ex2-flightrecorder/main.go w/02-execution-tracer/exercises/ex2-flightrecorder/main.go
+index 2a82d2e..b4a7917 100644
+--- i/02-execution-tracer/exercises/ex2-flightrecorder/main.go
++++ w/02-execution-tracer/exercises/ex2-flightrecorder/main.go
+@@ -60,24 +60,26 @@ func (s *service) handle(ctx context.Context, id int) string {
+ // refresh keeps the cache warm. Most refreshes are incremental and cheap;
+ // every fourth one is a full revalidation.
+ func (s *service) refresh(ctx context.Context, n int) {
+-	s.mu.Lock()
+-	defer s.mu.Unlock()
+-
+ 	trace.WithRegion(ctx, "refresh cache", func() {
+ 		if n%4 != 3 {
+ 			// Incremental: touch a few entries.
++			s.mu.Lock()
++			defer s.mu.Unlock()
+ 			for i := range 100 {
+ 				s.cache[rand.IntN(cacheEntries)] = fmt.Sprintf("value-%d-%d", n, i)
+ 			}
+ 			return
+ 		}
+-		// Full revalidation: rebuild and verify every entry.
++		// Full revalidation: rebuild and verify OUTSIDE the lock...
+ 		next := make(map[int]string, cacheEntries)
+ 		for i := range cacheEntries {
+ 			next[i] = fmt.Sprintf("value-%d-%d", n, i)
+ 		}
+ 		spin(250 * time.Millisecond) // "verify" the rebuilt entries
++		// ...then a brief write lock for the pointer swap.
++		s.mu.Lock()
+ 		s.cache = next
++		s.mu.Unlock()
+ 	})
+ }
+ 
