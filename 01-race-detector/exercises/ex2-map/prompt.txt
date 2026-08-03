@@ -1,0 +1,1 @@
+Run the program in this directory with `go run -race .` and analyze the race detector output. Show me the distinct race stacks (dedupe repeated occurrences of the same underlying race, not just identical text).
