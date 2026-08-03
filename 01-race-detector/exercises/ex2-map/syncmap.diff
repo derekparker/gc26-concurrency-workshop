@@ -1,0 +1,79 @@
+diff --git i/01-race-detector/exercises/ex2-map/main.go w/01-race-detector/exercises/ex2-map/main.go
+index 56b3ef8..bb02e28 100644
+--- i/01-race-detector/exercises/ex2-map/main.go
++++ w/01-race-detector/exercises/ex2-map/main.go
+@@ -11,10 +11,10 @@ import (
+ 
+ // Service simulates a service with both a cache and metrics tracking
+ type Service struct {
+-	// cache stores expensive computation results - read frequently after initial computation
+-	// Keys are stable (user IDs, computation keys)
+-	cacheMu sync.RWMutex
+-	cache   map[string]*CachedResult
++	// cache stores expensive computation results - read frequently after initial computation.
++	// Keys are stable and, per-worker, disjoint: exactly the pattern sync.Map documents itself
++	// for, so it replaces the map+RWMutex pair entirely.
++	cache sync.Map // key string -> *CachedResult
+ 
+ 	// metrics tracks real-time metrics - written frequently, read occasionally
+ 	metricsMu sync.Mutex
+@@ -31,7 +31,6 @@ type CachedResult struct {
+ // NewService creates a new service instance
+ func NewService() *Service {
+ 	return &Service{
+-		cache:   make(map[string]*CachedResult),
+ 		metrics: make(map[string]int),
+ 	}
+ }
+@@ -39,11 +38,10 @@ func NewService() *Service {
+ // GetFromCache retrieves a cached value or computes and caches it
+ func (s *Service) GetFromCache(key string) (*CachedResult, bool) {
+ 	// Check if value exists in cache
+-	s.cacheMu.RLock()
+-	result, exists := s.cache[key]
+-	s.cacheMu.RUnlock()
++	v, exists := s.cache.Load(key)
+ 
+ 	if exists {
++		result := v.(*CachedResult)
+ 		// Increment hit count
+ 		result.HitCount.Add(1)
+ 		s.RecordMetric("cache.hits")
+@@ -56,30 +54,25 @@ func (s *Service) GetFromCache(key string) (*CachedResult, bool) {
+ 
+ // StoreInCache stores a computed value in the cache
+ func (s *Service) StoreInCache(key string, value string) {
+-	s.cacheMu.Lock()
+-	defer s.cacheMu.Unlock()
+-	s.cache[key] = &CachedResult{
++	s.cache.Store(key, &CachedResult{
+ 		Value:      value,
+ 		ComputedAt: time.Now(),
+-	}
++	})
+ }
+ 
+ // InvalidateCacheEntry removes a cache entry (rare operation)
+ func (s *Service) InvalidateCacheEntry(key string) {
+-	s.cacheMu.Lock()
+-	delete(s.cache, key)
+-	s.cacheMu.Unlock()
++	s.cache.Delete(key)
+ 	s.RecordMetric("cache.invalidations")
+ }
+ 
+ // GetCacheStats returns cache statistics
+ func (s *Service) GetCacheStats() (entries int, totalHits int) {
+-	s.cacheMu.RLock()
+-	defer s.cacheMu.RUnlock()
+-	for _, result := range s.cache {
++	s.cache.Range(func(_, v any) bool {
+ 		entries++
+-		totalHits += int(result.HitCount.Load())
+-	}
++		totalHits += int(v.(*CachedResult).HitCount.Load())
++		return true
++	})
+ 	return entries, totalHits
+ }
+ 

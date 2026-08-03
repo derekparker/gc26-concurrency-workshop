@@ -138,10 +138,15 @@ Expect the build to break once you change the type: `verifier` also reads
 compile error is a feature, changing a field to an atomic changes its
 contract, and the compiler hands you every caller that has to know.
 
-**`sync.Map`?** Reasonable for the cache (stable keys, read-mostly, exactly
-its documented use case), and it would remove the `RWMutex`. But it's
-`any`-typed, doesn't fix `HitCount`, and is wrong for the write-heavy
-metrics map. Good discussion, not required.
+**`sync.Map`?** Reasonable-looking for the cache (stable keys, read-mostly,
+exactly its documented use case), and it would remove the `RWMutex`. But
+it's `any`-typed, doesn't fix `HitCount` on its own (that field still needs
+`atomic.Int64` regardless of the map type), and is wrong for the
+write-heavy metrics map. `bench_test.go` in this directory benchmarks both:
+on the machine this was written on, `sync.Map` came out ~15% *slower* than
+`RWMutex` for this workload, despite matching the documented use case.
+Worth running yourself and worth discussing — not required, and not a free
+win just because the docs describe your access pattern.
 
 Two use cases, two different answers, that's the point of this exercise.
 

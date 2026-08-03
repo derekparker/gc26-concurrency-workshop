@@ -136,10 +136,40 @@ Four distinct problems hide in the report:
    - `cache` map: read-mostly, keys stable. Many concurrent readers, rare
      writers. `sync.RWMutex` is the shape.
 
-5. **The trap that survives every lock choice (2 min).**
-   `HitCount++` is a *write* that lives on the cache's *read* path
-   (`GetFromCache` under `RLock`). Under `RWMutex.RLock`, N readers run
-   concurrently and all mutate `HitCount` — the detector still fires.
+5. **The trap that survives every lock choice — live (5 min).** Don't just
+   narrate this, run it. Four diffs, applied in order from
+   `01-race-detector/exercises/ex2-map`, each building on the last:
+
+   | Step | Command | Result |
+   |------|---------|--------|
+   | 0 | (none) | `main.go` as committed: the racy version |
+   | 1 | `git apply locks.diff` | `RWMutex` on cache, `Mutex` on metrics — `HitCount` still a plain `int` |
+   | 2 | `git apply atomic.diff` | `HitCount` → `atomic.Int64` — **breaks the build on purpose** |
+   | 3 | `git apply atomic-fix.diff` | fixes `verifier`, the exercise's official fix |
+
+   Reset with `git checkout -- main.go` (all diffs applied cumulatively;
+   `git apply -R <name>` undoes one step if you want to back up instead of
+   resetting everything).
+
+   **Apply `locks.diff` and run `go run -race .`.** Every map operation is
+   now guarded — `cacheMu.RLock`/`Lock` around the cache, `metricsMu.Lock`
+   around metrics. Ask the room: *"Is this correct now?"* Most will say
+   yes. Run it:
+
+   ```
+   Found 3 data race(s)
+   ```
+
+   All three point at `GetFromCache` (`main.go:47`, `result.HitCount++`)
+   and `GetCacheStats` (`main.go:81`, `totalHits += result.HitCount`) — the
+   exact category 3 report from step 3, unchanged. **The map is perfectly
+   locked and the program still races.** `HitCount++` is a write that lives
+   on the cache's *read* path (`GetFromCache` runs under `RLock`), and
+   `GetCacheStats` reads the same field under its own `RLock`. `RWMutex`
+   lets N readers run concurrently — and now N readers concurrently mutate
+   `HitCount`. Locking the map bought nothing for what the map's *values*
+   point to.
+
    Three options; the atomic wins:
 
    - Make `HitCount` an `atomic.Int64` — fine under `RLock`, no blocking.
@@ -147,11 +177,81 @@ Four distinct problems hide in the report:
      whole point of `RWMutex` gone.
    - Drop per-entry hit counts, use the metrics map for hits.
 
+   **Apply `atomic.diff` and rebuild.** It **fails to compile**, on purpose:
+
+   ```
+   ./main.go:279:5: invalid operation: hitCount2 <= hitCount1
+        (operator <= not defined on struct)
+   ```
+
+   `atomic.diff` only touches the `CachedResult` struct and the cache's own
+   methods (`GetFromCache`, `StoreInCache`, `GetCacheStats`) — it
+   deliberately leaves `verifier`'s two direct `HitCount` reads alone. Stop
+   here and say it out loud, **it's the point of the exercise**: changing
+   one field's type handed the compiler an exhaustive list of every place
+   that field is touched. Making a field atomic is a change to its
+   *contract*, and the type system enforces the new contract everywhere.
+   Compare that to the racy version, where the same field was read from
+   three goroutines and nothing complained at all.
+
+   **Apply `atomic-fix.diff`.** It's two lines — `verifier` now calls
+   `.Load()` at both call sites (`main.go:269` and `:277`). Run
+   `go run -race .` a handful of times — clean every time, exit 0, and the
+   hit rate is unchanged (~93%). This is the exercise's official fix:
+   `RWMutex` on the cache map, `Mutex` on the metrics map, `atomic.Int64`
+   for the field living behind the cache's pointers.
+
+6. **Bonus: measure before reaching for `sync.Map` (5 min, time permitting).**
+   The cache's access pattern — stable keys, read-mostly, and disjoint per
+   worker (`user_%d_%d`, each `cacheWorker` only touches its own keys) — is
+   *exactly* what `sync.Map`'s docs describe as its sweet spot. Ask the
+   room: *"So should we have used `sync.Map` from the start?"* Let them
+   argue it both ways, then measure instead of guessing:
+
+   ```bash
+   git apply syncmap.diff   # on top of the official fix — cache becomes sync.Map
+   go run -race .           # still clean
+   go test -bench=. -benchmem -run=^$ -benchtime=2s -count=3 .
+   ```
+
+   Then back up one step and run the same benchmark against the `RWMutex`
+   version for comparison:
+
+   ```bash
+   git apply -R syncmap.diff
+   go test -bench=. -benchmem -run=^$ -benchtime=2s -count=3 .
+   ```
+
+   `bench_test.go` drives `GetFromCache`/`StoreInCache` concurrently at the
+   same ~95/5 read/write ratio the real workers use, with each goroutine
+   confined to its own key range — the same shape as the real workload, not
+   a synthetic worst case. On the machine this was written on (Apple M1, 8
+   cores):
+
+   ```
+   RWMutex + atomic:  ~136-152 ns/op   2 B/op   0 allocs/op
+   sync.Map:          ~160-164 ns/op   5 B/op   0 allocs/op
+   ```
+
+   **`sync.Map` is ~15% *slower* here** — on a workload that matches its
+   documented use case almost exactly. Land the actual lesson: the docs
+   describing your access pattern is a reason to *try* a tool, not a reason
+   to *trust* it. `sync.Map`'s `any`-typed `Load`/`Store` and its internal
+   read/dirty-map bookkeeping cost more than `RWMutex`'s cache-line traffic
+   recovers, at least at this contention level and core count. Numbers will
+   differ on other hardware — that's exactly why you run the benchmark
+   yourself instead of repeating this table.
+
+   End on `git apply -R syncmap.diff` (or `git checkout -- main.go` then
+   reapply `locks.diff` + `atomic.diff` + `atomic-fix.diff`) so the room
+   leaves with the `RWMutex` version as the answer, not `sync.Map`.
+
 ## Fix
 
-Do this in two passes, the compile error between them is the teaching beat.
-
-### Pass 1, the types and the `Service` methods
+The official fix is `locks.diff` + `atomic.diff` + `atomic-fix.diff` applied
+in sequence (see walkthrough step 5) — `RWMutex` guarding the cache map,
+`Mutex` guarding the metrics map, `atomic.Int64` for `HitCount`. Full end
+state:
 
 ```go
 type Service struct {
@@ -226,33 +326,6 @@ func (s *Service) GetAllMetrics() map[string]int {
 }
 ```
 
-### Pass 2, let the compiler find the remaining readers
-
-Build now and it **fails**, on purpose:
-
-```
-vet: ./main.go:261:5: invalid operation: hitCount2 <= hitCount1
-     (operator <= not defined on struct)
-```
-
-(the exact line number drifts depending on how much of the struct you
-rewrote, the message is what matters)
-
-`verifier` still reads `HitCount` as a plain `int` at `main.go:251` and
-`:259`. Fix both:
-
-```go
-hitCount1 := result1.HitCount.Load()   // main.go:251
-hitCount2 := result2.HitCount.Load()   // main.go:259
-```
-
-**Say this part out loud, it's the point of the exercise:** you changed one
-field's type and the compiler handed you an exhaustive list of every place
-that field is touched. Making a field atomic is a change to its *contract*,
-and the type system enforces the new contract everywhere. Compare that to
-the racy version, where the same field was read from three goroutines and
-nothing complained at all.
-
 Verify — should be clean every run, and the flakiness is gone:
 
 ```bash
@@ -271,6 +344,10 @@ Total operations recorded: ~630
 No warnings, exit 0. Loop it 20× if you want to make the flakiness point
 concrete.
 
+`syncmap.diff` (applies on top of `locks.diff` + `atomic.diff` +
+`atomic-fix.diff`) swaps the cache to `sync.Map` for the bonus benchmark in
+walkthrough step 6 — not part of the official fix, see that step for why.
+
 ## Ask the room
 
 - Why does the plain run only crash *sometimes*, while `-race` complains
@@ -280,8 +357,10 @@ concrete.
 - The race on `CachedResult.HitCount` survives even if you lock every map
   operation perfectly. Where does that race live, and why is a lock on the
   *map* the wrong tool for it?
-- Is `sync.Map` a fit for either of these maps? For which one, and why not
-  the other?
+- `sync.Map`'s docs describe exactly the cache's access pattern (stable,
+  disjoint-per-goroutine keys, read-mostly) — yet the benchmark showed it
+  *losing* to `RWMutex` here. What does that tell you about trusting a
+  "documented fit" without measuring?
 
 ## Common pitfalls
 
@@ -301,3 +380,7 @@ concrete.
   `result.HitCount.Load()` behind a helper that also takes `cacheMu.RLock`,
   they'll hang. `sync.RWMutex.RLock` is *not* recursive across an
   intervening `Lock` — the Go docs are explicit; mention it.
+- **Assuming `sync.Map` must be faster because the doc comment describes
+  your workload.** The bonus benchmark in walkthrough step 6 shows the
+  opposite here. "Matches the documented use case" is a reason to
+  benchmark, not a reason to skip benchmarking.
