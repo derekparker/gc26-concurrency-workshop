@@ -28,11 +28,17 @@ Worker 2 halfway: 2800 items so far (last update 0s ago)
 Processing complete!
 Workers used: 5 (expected: 5)
 Total items processed: 5000 (expected: 5000)
+Total time: 208ms
 ```
 
-Run it a handful of times. On this Go 1.25+ setup it prints 5000 basically
-every time — which is the whole point of the exercise. Now flip on the
-detector:
+Run it a handful of times. On Go 1.25+ the item total prints
+5000 basically every time — which is the whole point of the exercise.
+
+Occasionally (~1 run in 20) `Workers used` prints 4 instead of 5 — a lost
+`s.workers++`. If it happens live, use it: the loss you *can* see is the
+tip; `-race` finds the ones you can't.
+
+Now flip on the detector:
 
 ```bash
 go run -race .
@@ -69,7 +75,7 @@ goroutines and read from those same goroutines *plus* the monitor:
 - `workers` — `RegisterWorker` does `s.workers++`.
 - `lastUpdated` — a multi-word `time.Time`, written in both methods.
 
-7–8 warnings collapse to just those three racy fields. `startTime` is
+5–8 warnings collapse to just those three racy fields. `startTime` is
 written once in `NewStats` *before* any `go`, then only read — the goroutine
 creation is a happens-before edge, so it's safe.
 
@@ -81,8 +87,11 @@ creation is a happens-before edge, so it's safe.
 
 2. **Turn on `-race` (3 min).** Run `go run -race .`. Point out:
 
-   - Exit code 66 — race detector's tell.
-   - "Found 7 data race(s)" at the bottom — do NOT try to fix 7 things.
+   - Exit code 66 — race detector's tell. (That's the *program's* code;
+     `go run` itself exits 1, so `echo $?` on stage shows 1. Build the
+     binary if you want to show 66.)
+   - "Found N data race(s)" at the bottom — usually 5–8, and it varies
+     run to run. Do NOT try to fix N things.
    - Same address `0x00c...` appearing in multiple reports = same field.
 
 3. **Read the first report line-by-line (3 min).** Same file, same line
@@ -99,8 +108,8 @@ creation is a happens-before edge, so it's safe.
    `main.go:141` (`go processItems(...)`) — the workers racing each other,
    as expected.
 
-4. **Inventory, don't chase (2 min).** Rather than click through all seven
-   reports, `grep` or eyeball for the distinct call sites in *your* code
+4. **Inventory, don't chase (2 min).** Rather than click through every
+   report, `grep` or eyeball for the distinct call sites in *your* code
    (ignore `waitgroup.go`, `runtime/*`). Students should land on three
    fields: `workers`, `processed`, `lastUpdated`. Reports on line 28
    (`s.processed += items`) and lines 29/35 (`s.lastUpdated = time.Now()`)
@@ -174,6 +183,7 @@ Starting 5 workers...
 Processing complete!
 Workers used: 5 (expected: 5)
 Total items processed: 5000 (expected: 5000)
+Total time: 208ms
 ```
 
 No `WARNING: DATA RACE`, no `Found N data race(s)`, exit code 0.
@@ -197,9 +207,12 @@ No `WARNING: DATA RACE`, no `Found N data race(s)`, exit code 0.
 - **Adding `atomic.Int64` for the counters and calling it done.** That
   handles `processed`/`workers` but leaves `lastUpdated` — a multi-word
   `time.Time` — racy. Atomics can't help there; you need the mutex anyway.
-- **Reentrant lock deadlock in `IsStale`.** Extremely common. If a student
-  reports "my program hangs after the fix," it's this. Go mutexes don't
-  recurse; `sync.Mutex.Lock` on a mutex you already hold blocks forever.
+- **Reentrant lock deadlock in `IsStale`.** Extremely common. It doesn't
+  present as a hang — the runtime's deadlock detector kills it in about
+  0.1s with `fatal error: all goroutines are asleep - deadlock!`. (You'd
+  only get a true hang if some other goroutine were still ticking.) Go
+  mutexes don't recurse; `sync.Mutex.Lock` on a mutex you already hold
+  blocks forever.
 - **Locking `NewStats`.** Not wrong, but unnecessary — no goroutine can see
   the `*Stats` before `NewStats` returns. Good time to mention that
   publication through a normal return value is a happens-before edge.

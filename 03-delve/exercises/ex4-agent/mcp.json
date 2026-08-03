@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "debugger": {
+      "command": "mcp-dap-server"
+    }
+  }
+}

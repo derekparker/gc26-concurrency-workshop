@@ -40,7 +40,7 @@ dlv debug
 The program is **phased**: `main` dispatches all 12 jobs, then reads
 all 12 reports. With `numWorkers=3`, `cap(jobs)=4`, and `cap(reports)=2`,
 this only works while `len(batch) <= cap(reports) + cap(jobs) +
-numWorkers = 9`. The unit tests used 4 jobs. Twelve doesn't fit.
+numWorkers = 9`. The original smoke test used 4 jobs. Twelve doesn't fit.
 
 The accounting closes exactly:
 
@@ -72,7 +72,13 @@ top frame is `runtime.gopark`. Climb to `main.main`:
 1  0x... in runtime.chansend
 2  0x... in runtime.chansend1
 3  0x... in main.main                     at ./main.go:79
+4  0x... in runtime.main
+(truncated)
 ```
+
+(`bt N` prints frames 0 through N — so `bt 4` gives you five. Delve 1.27
+also renders structs multi-line; the compressed one-line forms below are
+for the page, not what you'll see.)
 
 ```
 (dlv) frame 3
@@ -124,10 +130,11 @@ The buffer isn't opaque:
 ]
 ```
 
-Ring-buffer order — `sendx`/`recvx` are the wrap indices. Jobs 6–9 are
-trapped. **Say this out loud:** in a real system this is how you learn
-which specific work items are stuck in a wedged queue — which tenant,
-which request ID.
+Ring-buffer order — `sendx`/`recvx` are the wrap indices, and the rotation
+varies run to run (the contents 6–9 do not). Jobs 6–9 are trapped.
+**Say this out loud:** in a real system this is how you learn which
+specific work items are stuck in a wedged queue — which tenant, which
+request ID.
 
 ### 3. Interrogate `reports`
 
@@ -187,8 +194,41 @@ for range batch {
 }
 ```
 
-Option B — keep dispatch in main, put collection in a goroutine. Either
-breaks the cycle.
+Option B — keep dispatch in main and move collection into a goroutine. Two
+details decide whether this works, and both are worth drawing out:
+
+```go
+// Collector starts FIRST, so it is already draining while we dispatch.
+var collected sync.WaitGroup
+collected.Go(func() {
+	for range batch {
+		r := <-reports
+		log.Printf("job %d finished in %s", r.JobID, r.Duration)
+	}
+})
+
+log.Printf("dispatching %d jobs", len(batch))
+for _, job := range batch {
+	jobs <- job
+	log.Printf("dispatched job %d (%s)", job.ID, job.Target)
+}
+close(jobs)
+
+collected.Wait()   // ...or main exits before any report is printed
+```
+
+**Start the collector before the dispatch loop, not after.** Written the
+obvious way, with the `go func(){...}()` where the Phase-2 loop used to be,
+it deadlocks in exactly the same place, main never reaches the line that
+launches the collector, because it is already wedged on `jobs <- job` at
+job 10. Verified: identical `fatal error` at `dispatched job 9`.
+
+**And `main` has to wait for it.** Drop the `WaitGroup` and `main` returns
+the moment dispatch finishes, killing the collector mid-flight; you get
+`build complete` and zero `finished in` lines.
+
+Either option breaks the cycle, but only if you get the ordering right.
+Option A is the safer one to type live.
 
 **Non-fix worth naming:** growing the buffers to 12 "fixes" *this*
 batch. What happens with batch 13? Buffers move where senders block,
@@ -201,9 +241,13 @@ go run .
 ```
 
 ```
-job 12 finished in 10.5ms
+job 11 finished in 11ms
 build complete
 ```
+
+Reports arrive out of order from 3 workers, so the last ID varies — 15 of
+20 runs ended on job 11, the rest on 10 or 12. If a student says "I get
+job 11, not 12", they fixed it correctly. Count the `finished in` lines.
 
 ## Ask the room
 
@@ -216,7 +260,7 @@ build complete
   smell like? (Consumer too slow/dead vs producer too slow/dead.)
 - Where in your own systems have you shipped "buffer sized for the
   typical case"?
-- The unit tests (4 jobs) passed. What would you change in the test
+- The original 4-job smoke test passed. What would you change in the test
   suite to catch this structurally, not by luck?
 
 ## Common pitfalls

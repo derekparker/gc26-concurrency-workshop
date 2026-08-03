@@ -22,7 +22,7 @@ actual on shelves:   342 units
   [1] gopher-mug      stock= 36 reserved=0
   [2] gopher-tee      stock= 36 reserved=0
   [3] gopher-cap      stock= 36 reserved=0
-  [4] gopher-pin      stock= 96 reserved=0
+  [4] gopher-pin      stock= 96 reserved=0     <- varies run to run (96-108)
   [5] gopher-sticker  stock= 99 reserved=0
 FAILED: inventory drift of +30 units
 ```
@@ -110,33 +110,40 @@ duration of the reasoning*.
 
 ### Walkthrough (verified transcript)
 
+Goroutine IDs — and the exact order the first few hits arrive in — vary run
+to run. The shape is what's stable: a run of decrements, then one increment.
+
 ```
 (dlv) break main.main
 (dlv) continue
 (dlv) watch -w store.stock[5]
-Watchpoint store.stock[5] set at 0x1049cf8b0
+Watchpoint store.stock[5] set at 0x...
 (dlv) continue
 > watchpoint on [store.stock[5]] main.main() ./main.go:138 (hits goroutine(1):1 total:1)
 => 138:		store.stock[i] = initialPerItem          <- setup, expected
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (goroutine 23)
+> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (hits goroutine(23):1 total:2)
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).Reserve() ./main.go:64 (goroutine 22)
+> watchpoint on [store.stock[5]] main.(*Warehouse).Reserve() ./main.go:64 (hits goroutine(22):1 total:3)
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).Reserve() ./main.go:64 (goroutine 20)
+> watchpoint on [store.stock[5]] main.(*Warehouse).Reserve() ./main.go:64 (hits goroutine(20):1 total:4)
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (goroutine 23)
+> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (hits goroutine(23):2 total:5)
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (goroutine 22)
+> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (hits goroutine(22):2 total:6)
 (dlv) print store.stock[5]
 95                                    <- 5 legitimate ops: 100 -> 95. so far so good
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).releaseExpired() ./main.go:93 (goroutine 19)
+> watchpoint on [store.stock[5]] main.(*Warehouse).releaseExpired() ./main.go:93 (hits goroutine(19):1 total:7)
 (dlv) print store.stock[5]
 99                                    <- WENT UP BY 4. caught.
 (dlv) stack 3
-0  main.(*Warehouse).releaseExpired   at ./main.go:93
-1  main.main.func1                    at ./main.go:160    <- the janitor goroutine
+0  0x... in main.(*Warehouse).releaseExpired
+   at ./main.go:93
+1  0x... in main.main.func1                       <- the janitor goroutine
+   at ./main.go:160
+2  0x... in runtime.goexit
+   at /usr/local/go/src/runtime/asm_arm64.s:1447
 ```
 
 The culprit line (the hit reports the line *after* the write):

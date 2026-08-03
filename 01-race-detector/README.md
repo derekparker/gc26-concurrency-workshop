@@ -54,6 +54,28 @@ the [Go memory model](https://go.dev/ref/mem): if two conflicting accesses
 are not ordered by happens-before, that's a data race, *even if the accesses
 didn't physically collide on this run*.
 
+Two optimizations explain the price tag in [Cost and
+Configuration](#cost-and-configuration):
+
+- **Shadow memory.** A vector clock per goroutine is cheap; a vector clock
+  per *memory word* would not be. Instead TSan keeps a small fixed number of
+  **shadow cells** beside every word of your program's memory, each recording
+  one recent access as a (goroutine, timestamp, read/write) triple, and
+  decides from that sliding window rather than from unbounded history. This
+  is wired straight into Go's allocator: every time the heap grows,
+  `mallocgc` calls `racemapshadow` to tell TSan about the new range
+  (`runtime/malloc.go`), and shadow exists only for heap and data/bss.
+  Shadow scales with your program's memory footprint, which is *why* `-race`
+  costs a multiple of your memory rather than a constant.
+- **Epochs.** Comparing full vector clocks on every access would be
+  O(goroutines) per access. The FastTrack insight (Flanagan & Freund, PLDI
+  2009) is that the overwhelming majority of accesses are already cleanly
+  ordered by some happens-before chain, so the common case collapses to a
+  pair of scalar **epochs**, one (goroutine, timestamp) pair, making the
+  check O(1). Only genuine concurrent read-sharing promotes back to a full
+  vector clock. The vector clocks buy precision; not needing them most of
+  the time buys the speed.
+
 Two consequences worth internalizing:
 
 - **No false positives.** If `-race` reports a race, it is a real race. Don't
@@ -104,9 +126,21 @@ How to read it:
    report one at a time.
 
 The address matches *within* a run, but don't expect it to reproduce across
-runs: Go 1.26 randomizes the heap base address at startup on 64-bit platforms
-(a security hardening measure, disable with
-`GOEXPERIMENT=norandomizedheapbase64` if you ever need to).
+runs, it's simply wherever the allocator happened to put the object.
+
+Note the familiar `0x00c0...` in these reports, though. Go 1.26 randomizes
+the heap base address at startup on 64-bit platforms as a hardening measure
+(disable with `GOEXPERIMENT=norandomizedheapbase64`), but
+race-instrumented builds **opt out**, ThreadSanitizer needs a fixed shadow
+mapping, so `-race` keeps the classic arena addresses. Compare a trivial
+`fmt.Printf("%p", new(int))`:
+
+```
+plain:  0x47172f584130   0x2ca2e170e020   0x5c0245294020
+-race:  0xc000012188     0xc00009e038     0xc000096038
+```
+
+That's why every sample address in this section starts `0x00c...`.
 
 ## Cost and Configuration
 
@@ -142,10 +176,10 @@ GORACE="strip_path_prefix=$PWD/" go run -race .  # shorter paths in reports
 - **`sync.WaitGroup.Go`** (Go 1.25) replaces the error-prone
   `wg.Add(1)` / `go func() { defer wg.Done() ... }()` dance, you'll see it
   in the demo. You don't have to do the rewrite by hand: `go fix ./...`
-  applies it for you via the `waitgroupgo` modernizer. (`go fix` was
+  applies it for you via the `waitgroup` modernizer. (`go fix` was
   completely rebuilt in Go 1.26 as the home of Go's modernizers, on the same
-  analysis framework as `go vet`; the analyzer is named `waitgroup` in 1.26
-  and `waitgroupgo` from 1.27.)
+  analysis framework as `go vet`. The analyzer is named `waitgroup` on the
+  Go 1.26 you're running today, and is renamed `waitgroupgo` in 1.27.)
 
 ## What the Race Detector Won't Catch
 

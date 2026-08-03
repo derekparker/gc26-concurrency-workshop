@@ -50,8 +50,8 @@ defer trace.Stop()
 ```
 
 ```bash
-# 2. Tests and benchmarks:
-go test -trace=trace.out ./...
+# 2. Tests and benchmarks (one package at a time — -trace rejects multiple):
+go test -trace=trace.out .
 ```
 
 ```go
@@ -163,9 +163,13 @@ once at startup can therefore be wrong later. Both behaviors switch off if
 - Go 1.25+ (Go 1.26 recommended, these modules declare `go 1.26`); the flight
   recorder exercise needs 1.25 at minimum
 - Chrome/Chromium for the timeline view
-- Network access once for the ex4 capstone (its first build downloads
-  `golang.org/x/exp/trace` and the MCP SDK); ex4's agent stage optionally uses
-  Claude Code
+- **graphviz** (`dot`) for the `/io`, `/block`, `/syscall`, and `/sched`
+  graph pages — the trace viewer shells out to it. Without graphviz those
+  pages fail; the `-pprof=<kind>` + `go tool pprof -top` path used
+  throughout these notes needs nothing extra and is the safe fallback.
+- Network access once for the ex4 capstone (its first build downloads 8
+  modules, ~49 MB: `golang.org/x/exp/trace`, the MCP SDK, and their
+  dependencies); ex4's agent stage optionally uses Claude Code
 
 ## Looking Ahead: Go 1.27
 

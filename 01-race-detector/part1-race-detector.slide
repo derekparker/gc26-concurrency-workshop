@@ -93,7 +93,7 @@ Invocation is simple, the skill is in reading what comes back.
 :
 : Run it without -race first: the count is wrong, but nothing complains. Then run it with -race.
 :
-: Demo diffs apply in sequence from the repo root: mutex.diff, trace.diff, fix-mutex.diff, atomic.diff. Reset with: git checkout -- 01-race-detector/demo/counter.go
+: Demo diffs apply from 01-race-detector/demo/ by bare filename, in sequence: git apply mutex.diff, then trace.diff, fix-mutex.diff, atomic.diff. None are skippable — atomic.diff's context includes the imports trace.diff adds, so skipping trace.diff makes step 4 fail. Reset with: git checkout -- counter.go
 
 ## How it works — the 2-minute version
 
@@ -110,8 +110,16 @@ Invocation is simple, the skill is in reading what comes back.
   clock is at or behind B's in every slot.
 - If two conflicting accesses are not ordered by happens-before, that's a data
   race — *even if the accesses didn't physically collide on this run.*
+- **Shadow memory** is what you pay for: a few fixed-size cells beside *every
+  word* of your memory, each holding one recent (goroutine, timestamp,
+  read/write). It scales with your heap — that's the 5–10× memory.
+- **Epochs** are what makes it fast: comparing whole vector clocks per access
+  would be O(goroutines), so the common ordered case collapses to a single
+  (goroutine, timestamp) pair — O(1).
 
 : The vector clock bullet is the mechanism people usually hand-wave. One line if you're short on time: it's a counter per goroutine, and locking a mutex copies the unlocker's knowledge into the locker's clock.
+:
+: The last two bullets are the answer to "why is it 5-10x memory?" and to the sharp attendee who works out that a vector clock per memory word would be O(n) per access. Shadow memory scales with your heap, not your goroutine count — it's wired into mallocgc, which calls racemapshadow on every heap growth. Epochs are the FastTrack result (Flanagan & Freund, PLDI 2009): almost every access is cleanly ordered, so you only need the full clock on real concurrent read-sharing. Skip both bullets entirely if you're behind; the README carries the detail.
 :
 : That last clause is the one that surprises people. Don't skip it — it sets up the next slide, and it's why the detector is so much better than 'run it a thousand times and hope'.
 
@@ -252,7 +260,7 @@ Replaces the error-prone `Add`/`Done` dance. You'll see it in the demo.
 
 And you don't have to do it by hand — `go fix` rewrites it for you:
 
-	go fix ./...        # the waitgroupgo modernizer
+	go fix ./...        # the waitgroup modernizer
 
 : Fewer places to forget a Done() and hang forever. Small quality-of-life change, but it removes an entire category of 'why is this test hanging' bugs.
 :

@@ -21,9 +21,12 @@ Worker 2 halfway: 2800 items so far (last update 0s ago)
 Processing complete!
 Workers used: 5 (expected: 5)
 Total items processed: 5000 (expected: 5000)
+Total time: 208ms
 ```
 
-Run it ten times. It prints 5000 every time. So it's correct... right?
+Run it ten times. The item total is 5000 every time. So it's correct...
+right? (If you get unlucky you may see `Workers used: 4 (expected: 5)` —
+hold that thought.)
 
 ## Your Task
 
@@ -42,7 +45,7 @@ Run it ten times. It prints 5000 every time. So it's correct... right?
 
 ## Reading Your First Report
 
-You should see several warnings (typically 7–8). They collapse to just
+You should see several warnings (typically 5–8). They collapse to just
 **three racy fields**, remember: fix the shared state, not each warning.
 For example:
 

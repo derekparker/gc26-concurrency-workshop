@@ -52,7 +52,7 @@ to get any. The heartbeat isn't slow; it isn't running.
 Drive this live. Every step names what to click and what to point at.
 
 1. **Show the source first (~30 seconds).** Open `main.go`, scroll to the
-   `wg.Go(func() { processBatch(i) })` loop at line 52. That's the whole
+   `wg.Go(func() { processBatch(i) })` loop at lines 52–56. That's the whole
    bug in one line: fan-out proportional to workload, not to hardware.
 
 2. **Run twice on stage.** Emphasize that p50 lies:
@@ -152,11 +152,13 @@ in two tabs:
 - **View trace by proc**: same wall of blue on the fixed trace (throughput
   is the same!), but heartbeat slices now appear on a regular ~10ms cadence
   because there's always a P free within one preemption quantum.
-- **Scheduler latency profile**: the tall `asyncPreempt` bar under
-  `processBatch` is gone.
+- **Scheduler latency profile**: the `asyncPreempt` delay collapses from
+  ~800s to ~14s. Don't say "gone" — the profile is still dominated by a tall
+  bar, it's just `chanrecv2` now (workers idling on the jobs channel), which
+  is exactly what healthy looks like.
 
-Mention the `GOMAXPROCS-1` variant from the README table: 7% throughput cost
-buys the heartbeat ~15ms p99. That's a *knob you can now justify* with two
+Mention the `GOMAXPROCS-1` variant from the README table: a few percent of
+throughput buys the heartbeat ~15ms p99. That's a *knob you can now justify* with two
 trace screenshots.
 
 ## Ask the room
@@ -176,6 +178,15 @@ trace screenshots.
   probabilistic; a single lucky run can undersell it. Have a pre-generated
   `broken.trace` in your back pocket in case the room's laptop is fast
   enough to hide it.
+- **Occasionally the runtime writes a trace nothing can read.** Roughly 1
+  run in 25 under heavy machine load produces a `scheduling.trace` that
+  fails to parse with `expected batch event, got event 0` or `expected
+  stack event, got 4`. It is not a truncated file and not a tool-version
+  problem — `go tool trace`, `go tool trace -d=parsed`, and the ex4
+  analyzer all fail identically on the same bytes, and the failure is
+  deterministic per file. Nothing in the notes can fix it: **just delete
+  the trace and re-run.** Worth saying out loud if it happens live, so the
+  room doesn't think they broke something.
 - **Students often "fix" the symptom, not the cause.** A `runtime.Gosched()`
   in `processBatch` or bumping the heartbeat priority via `time.Sleep`
   tweaks patches the specific case; it doesn't address the queue tax. Push

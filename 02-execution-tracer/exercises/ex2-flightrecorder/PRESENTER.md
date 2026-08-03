@@ -54,11 +54,13 @@ Trace-viewer cues:
   execution.
 - **Synchronization blocking profile**: ~2s of cumulative delay in
   `sync.(*RWMutex).RLock` under `main.(*service).handle`.
-- The snapshot is a few hundred KB — not a 12-second whole-run trace.
+- The snapshot is ~0.9 MB covering the last 5s, against ~1.8 MB for a
+  12-second whole-run trace.
 
 ## Root cause
-Every fourth cache refresh (`n%4 != 3` in `service.refresh`) is a **full
-revalidation**: build a fresh 50 000-entry map, "verify" it with a 250ms
+Every fourth cache refresh (`n%4 == 3` in `service.refresh`, the fall-through
+after the `n%4 != 3` early return takes the cheap incremental path) is a
+**full revalidation**: build a fresh 50 000-entry map, "verify" it with a 250ms
 spin — and it does all of this while **holding the write lock**. Meanwhile
 eight worker goroutines are in `handle`, blocked in `RLock`. Classic lock
 convoy: one G holding an exclusive lock for hundreds of milliseconds behind
@@ -74,8 +76,9 @@ them straight from this file to a terminal.
    Point at:
    - `runFor = 12 * time.Second` — a stand-in for hours of production.
    - `slowThreshold = 100 * time.Millisecond` — the SLO breach threshold.
-   - `service.refresh` and the `n%4 != 3` branch: the whole-map rebuild
-     while `s.mu.Lock()` is held.
+   - `service.refresh`: the `n%4 != 3` early return is the *cheap* path
+     (touch 100 entries and leave). The whole-map rebuild is what falls
+     through on `n%4 == 3`, and it runs while `s.mu.Lock()` is held.
    - The `TODO 1` and `TODO 2` comments.
 
 2. **Run it unmodified.**
@@ -160,8 +163,12 @@ them straight from this file to a terminal.
    ```bash
    ls -lh flightrecorder.trace
    ```
-   A few hundred KB — not a 12s whole-run trace, and *definitely* not the
-   GB you'd have on a real service.
+   Under a megabyte (~0.9 MB). Be honest about the ratio here: a 12s
+   whole-run trace is only ~1.8 MB, so at this scale the saving is 2×,
+   not 1000×. The point isn't this run — it's that the snapshot size is
+   **bounded by `MinAge`/`MaxBytes` and doesn't grow with uptime**. Run
+   the same service for an hour and the whole-run trace is GB; the
+   snapshot is still ~1 MB.
 
 6. **Open the snapshot.**
    ```bash
@@ -179,8 +186,11 @@ them straight from this file to a terminal.
      the demo, doing its job here.
 
 8. **Goroutine analysis.**
-   - `main.(*service).worker` — Count 8, dominant column is
-     **Block time (sync)**.
+   - `main.(*service).worker` — Count 8, with a **~255ms Block time (sync)**
+     column that has no business being there at all. Don't call it the
+     *dominant* column: `Block time (sleep)` is ~4.6s, far bigger, but
+     that's just the deliberate sleep between requests. The sync column is
+     the small number that matters.
    - `main.(*service).refresher` — a single G with ~270ms of execution.
    - Ratio to say aloud: 8 × ~270ms of blocked-sync time — the workers
      spent ~2s of aggregate wall-clock parked on that one lock.
@@ -189,15 +199,22 @@ them straight from this file to a terminal.
    headless:
    ```bash
    go tool trace -pprof=sync flightrecorder.trace > sync.pprof
-   go tool pprof -top sync.pprof
+   go tool pprof -top -focus='RWMutex' sync.pprof
    ```
    Expect ~2s of cumulative delay concentrated on
    `sync.(*RWMutex).RLock` under `main.(*service).handle`. That's the
    convoy in pprof form.
 
-10. **User-defined regions** (`/userregions`). `refresh cache` appears
-    with a tiny handful of long durations amid many short ones. That's the
-    "every fourth refresh" pattern from the source, quantified.
+   **Use the `-focus`** — without it the convoy is the *third* row at 9.6%,
+   under `chanrecv1` (47%) and `selectgo` (43%), which are just the reporter
+   goroutine and tickers parked. Unfocused, this slide reads as "the lock
+   isn't the problem."
+
+10. **User-defined regions** (`/userregions`). The 5s window holds exactly
+    3 `refresh cache` regions: two at tens of microseconds, one at 250ms+.
+    That's the "every fourth refresh" pattern, quantified — though with
+    n=3 it's a thin histogram. The more striking row is
+    `handle request`: ~14,400 regions, 8 of them in the 398ms bucket.
 
 11. **State the diagnosis in one sentence.** *"Every fourth cache refresh
     does a full 250ms rebuild while holding the write lock; the eight
@@ -263,9 +280,14 @@ mutex contention orders of magnitude smaller.
 - **Forgetting `fr.Enabled()` guard.** After the first snapshot, `fr` is
   stopped. Without the guard, subsequent SLOW checks still call
   `snapshotOnce.Do` (a no-op) and log spam. Harmless, but ugly.
-- **Not seeing SLOW lines at all.** Different hardware, different luck.
-  Lower `slowThreshold` (say 50ms) or reduce `runFor` × increase odds by
-  running twice. Keep a canned `flightrecorder.trace` as a fallback.
+- **Not seeing SLOW lines at all.** This isn't luck, the incident is
+  deterministic: the refresher ticks every 2s, and the first `n%4 == 3`
+  lands on the 4th tick at t≈8s, where a 250ms spin runs under the write
+  lock, comfortably over the 100ms threshold. Every run produces the same
+  8 SLOW lines. So if you see none, something structural is off, don't
+  reach for `runFor`: **shortening it below ~9s removes the incident
+  entirely.** Check you haven't edited the tick interval or the threshold,
+  and keep a canned `flightrecorder.trace` as a fallback.
 - **"Why not just `net/http/pprof`'s trace endpoint?"** Good question —
   answer: same trace format, but you'd need to know *when* to start. The
   flight recorder is what you use when you can't predict the moment.

@@ -19,8 +19,11 @@ go run channels.go
 go tool trace channel.trace
 ```
 
-(`channel.trace` in this directory is a pre-generated backup in case the live
-run misbehaves; running the program overwrites it.)
+(`go run channels.go` writes `channel.trace` itself, so the first command
+above produces the file the second one opens. `*.trace` is gitignored, so a
+fresh clone has none, there is no checked-in backup. Run the program once
+before you go on stage and a known-good `channel.trace` will be sitting in
+this directory if the live run misbehaves.)
 
 Walk through `channels.go` first, it's ~70 lines. Point at `trace.Start(f)` /
 `defer trace.Stop()`: that's the entire integration cost. Mention the other
@@ -38,7 +41,7 @@ coming in exercise 2).
   into one of the five bursts), `a`/`d` pan, click a slice to see its stack
   trace and duration in the bottom panel.
 - Click a `main.sender` slice: bottom panel shows the call stack. Ask the
-  room: "the program ran for ~150ms, why is almost every pixel idle?"
+  room: "the program ran for ~105ms, why is almost every pixel idle?"
   Answer: it's waiting on the network, and *waiting leaves almost no trace on
   a CPU timeline*. Segue: the tracer knows exactly what it was waiting on.
 
@@ -46,9 +49,17 @@ coming in exercise 2).
 - Table of goroutines grouped by start location: `main.sender`,
   `main.receiver`, `main.main`, plus `net/http` internals.
 - Click `main.sender`. **What students should see:** a breakdown row where
-  Execution time is tiny (hundreds of µs) and the dominant column is network
-  wait / syscall, the 5×20ms of HTTP. Point out the per-group profile links
-  (Network wait, Sync block, Syscall, Scheduler wait).
+  Execution time is tiny (hundreds of µs to ~1ms) and the dominant column is
+  **Block time (select)**, ~105ms. Note what it is *not*: `Block time
+  (syscall)` reads `0s`, and there's no network column here at all.
+  `http.Transport.roundTrip` parks the caller in a `select` while a
+  *different* goroutine does the I/O. Scroll down to
+  `net/http.(*persistConn).readLoop` and you'll find that same ~105ms as
+  **Block time (network)**. Worth dwelling on: "my" goroutine's wait and the
+  kernel-level wait are accounted on two different goroutines, which is
+  exactly the kind of thing you cannot infer from reading the source. Point
+  out the per-group profile links (Network wait, Sync block, Syscall,
+  Scheduler wait).
 - Click `main.receiver`: dominated by "Block time (chan receive)", it spent
   its life parked on `<-ch`. Emphasize: **the tracer accounts for time spent
   doing nothing**, which is precisely what profilers can't do.
@@ -90,7 +101,8 @@ go tool trace channel.trace
 
 ### "User-defined tasks" (`/usertasks`)
 - **What students should see:** a table, Task type `requestAndSend`,
-  Count 1, and a duration histogram (~150–200ms bucket).
+  Count 1, and a duration histogram — the task lands in the **100ms**
+  bucket (`100ms`–`158ms`), elapsed ~106ms.
 - Click the count/bucket link to open the task list, then look at the single
   task's event log: a chronological table (When | Elapsed | Goroutine |
   Events) interleaving *both goroutines*: `task "requestAndSend" begin`,
@@ -105,8 +117,12 @@ go tool trace channel.trace
 ### "User-defined regions" (`/userregions`)
 - Region types with counts and duration histograms: `http request` ×5
   (~20ms each), `channel send` ×5 (~µs), `receive loop` ×1 (~whole run).
-  Note the http transport's own unnamed regions in the list too, the
-  standard library annotates some of itself.
+  Note the unnamed `""` rows in the list too. Those are *not* the standard
+  library annotating itself, no non-test stdlib package calls
+  `trace.StartRegion` at all. They're synthesized: a goroutine created while
+  its parent is inside an active region inherits an implicit
+  whole-lifetime region under the same task, which is how the transport's
+  dial goroutines end up here. Good aside if someone asks; skip otherwise.
 
 Reset for the next run of the demo:
 
@@ -139,6 +155,6 @@ git apply -R 02-execution-tracer/demo/tasks.diff
   (`-pprof=`) to keep moving.
 - `tasks.diff` is verified against this exact `channels.go`; if you edit the
   demo, regenerate the diff or `git apply --check` before going on stage.
-- Timing sanity check: the traced program takes ~150ms (5 × ~20ms requests +
-  overhead); if it takes multiple seconds, something is off with the local
-  server.
+- Timing sanity check: the traced program takes ~105ms (5 × ~20ms requests +
+  a few ms of overhead); if it takes multiple seconds, something is off with
+  the local server.

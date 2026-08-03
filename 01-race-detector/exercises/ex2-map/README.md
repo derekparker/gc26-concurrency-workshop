@@ -58,7 +58,9 @@ only.
    go run -race .
    ```
 
-   Now you get *pairs* of stacks, every single run. Inventory the races,
+   Now you get *pairs* of stacks, every run — though the map tripwire can
+   still kill the run early, before the summary; if that happens, re-run.
+   Inventory the races,
    you should find them on **both maps**, and on something that is *not* a
    map (look for a report pointing inside `GetFromCache`).
 
@@ -129,6 +131,12 @@ path. If `GetFromCache` takes only `RLock`, `-race` still fires on
 
 The atomic field is the idiomatic fix, a nice example of mixing a lock
 (for the map) with an atomic (for one hot field).
+
+Expect the build to break once you change the type: `verifier` also reads
+`HitCount` directly (`main.go:251` and `:259`) and comparing two
+`atomic.Int64` values won't compile. Use `.Load()` in both places. That
+compile error is a feature, changing a field to an atomic changes its
+contract, and the compiler hands you every caller that has to know.
 
 **`sync.Map`?** Reasonable for the cache (stable keys, read-mostly, exactly
 its documented use case), and it would remove the `RWMutex`. But it's

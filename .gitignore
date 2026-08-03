@@ -31,5 +31,14 @@ Thumbs.db
 # Local planning / agent design docs
 docs/
 
+# Part III demo binaries (built during the walkthrough)
+03-delve/demo/pipeline
+03-delve/demo/delve-demo
+
+# Part III core-dump artifacts: the .gz files ARE committed; setup.sh
+# unpacks them into these large, regenerable files.
+03-delve/demo/linux-core/pipeline.linux-amd64
+03-delve/demo/linux-core/pipeline.linux-amd64.core
+
 # Local presenter tooling
 sync-to-vault.sh

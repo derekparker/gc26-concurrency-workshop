@@ -16,6 +16,7 @@ go run .
 Opened 8 accounts, total on deposit: 8000
 
 [VIP report] frank (account 6) leads with balance 1290
+[VIP report] carol (account 2) leads with balance 1355
 Teller 2 completed 448 transfers
 ...
 Expected total: 8000

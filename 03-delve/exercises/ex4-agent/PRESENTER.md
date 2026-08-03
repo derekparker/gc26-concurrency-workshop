@@ -129,13 +129,16 @@ Response:
 
 ```
 Threads:
-  Thread 1:  [Go 1]  main.main
-  Thread 2:  [Go 2]  runtime.gopark
+  Thread 1: [Go 1] main.main
+  Thread 2: [Go 2] runtime.gopark
   ...
-  Thread 19: [Go 19] main.worker
-  Thread 20: [Go 20] main.worker
-  Thread 21: [Go 21] main.worker
+  Thread 35: [Go 35] main.worker
+  Thread 36: [Go 36] main.worker
+  Thread 37: [Go 37] main.worker
 ```
+
+The IDs shift run to run (35/36/37 one run, 7/8/9 the next) — don't read a
+specific number off the slide, read it off the output.
 
 DAP "threads" are goroutines under Delve. This is the agent's version
 of `goroutines -group userloc` — but without grouping. **Count the
@@ -144,7 +147,8 @@ tool calls it burns to get what one CLI command gave you.**
 ### Beat 4: `context` per goroutine — stacks with frame IDs
 
 `context` with `{}` returns the current goroutine's location + full
-stack + all locals. Add `{"threadId": 19}` for another goroutine.
+stack + all locals. Add `{"threadId": <id from info threads>}` for another
+goroutine.
 
 Sample response (main):
 
@@ -203,13 +207,14 @@ echo "This program deadlocks... (prompt as above)" | \
   --allowedTools "mcp__debugger"
 ```
 
-where `mcp.json` is
-`{"mcpServers":{"debugger":{"command":"<path>/mcp-dap-server"}}}`.
+`mcp.json` is committed next to the exercise README and looks up
+`mcp-dap-server` on `PATH`; swap in an absolute path if
+`$(go env GOPATH)/bin` isn't on yours.
 
 The captured baseline run produces the complete cycle — main parked on
 `jobs` (4/4) holding job 10, all three workers parked on `reports`
-(2/2) holding jobs 1/4/5, "the accounting closes exactly" — plus the
-structural fix. Keep a captured transcript in your back pocket: if the
+(2/2) holding three of the in-flight jobs (the IDs vary), "the accounting
+closes exactly" — plus the structural fix. Keep a captured transcript in your back pocket: if the
 live demo misbehaves, show the transcript.
 
 ## Ask the room
@@ -240,9 +245,13 @@ live demo misbehaves, show the transcript.
 
 - **Tools appear only after the session starts.** Before `debug`, the
   agent sees exactly one tool. Students may panic that "the tools
-  aren't there yet". They're not — that's by design; the surface grows
-  from 1 to 13 the moment a session is live. Show `/mcp` before and
-  after so the room sees the transition.
+  aren't there yet". They're not — that's by design; the surface swaps
+  from 1 tool to 12 the moment a session is live (`debug` is replaced,
+  not joined). Show `/mcp` before and after so the room sees it.
+
+  **Do this before your very first `debug` call** — it's a one-shot. After
+  a `stop`, `/mcp` lists 4 tools (`debug`, `disassemble`, `restart`,
+  `set-variable`), not 1, so the 1→12 transition only reads cleanly once.
 
 - **`evaluate` at the exception stop with no `frameId`.** Top frame is
   `runtime.gopark`; user variables aren't in scope. The agent must
@@ -256,9 +265,11 @@ live demo misbehaves, show the transcript.
   continue to the fatal error."* Note `clear-breakpoints` with `{}`
   is an error — it needs `file`, `function`, or `all`.
 
-- **Session wedged / double `debug` call.** Have the agent call `stop`
-  (or `restart`) and relaunch. Worst case: `/mcp` → reconnect the
-  server → re-prompt with "resume: launch the dispatcher again".
+- **Session wedged.** Have the agent call `stop` (or `restart`) and
+  relaunch. Worst case: `/mcp` → reconnect the server → re-prompt with
+  "resume: launch the dispatcher again". (Calling `debug` during a live
+  session can't happen the way you'd expect — it isn't in the tool list,
+  so it comes back as a JSON-RPC protocol error, `unknown tool "debug"`.)
 
 - **The agent starts reading `main.go`.** Deny the file-read permission
   prompt and let the denial teach the lesson — the prompt said

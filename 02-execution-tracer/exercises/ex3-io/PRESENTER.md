@@ -32,17 +32,18 @@ go tool trace io.trace
 ```
 
 Trace-viewer cues you're about to walk through:
-- **View trace by proc**: ~250ms of dense overlapping activity at the
-  start, then a **staircase** — one goroutine running back-to-back 25ms
-  slices, other P rows empty.
+- **View trace by proc**: ~30ms of dense overlapping activity at the
+  start (one fetch round — zoom in or you'll miss it), then a
+  **staircase** — one goroutine running back-to-back 25ms slices, other P
+  rows empty.
 - **Goroutine analysis**: `main.collector` × 1 with ~**5.0s** execution
-  time; `main.worker` × 8 with **7.9ms** total execution and huge
+  time; `main.worker` × 8 with **≈6–8ms** total execution and huge
   **Block time (chan send)**.
 - **Synchronization blocking profile**: ~38s cumulative in
   `runtime.chansend1` under `main.worker`.
 - **User-defined regions** (`/userregions`): `fetch` × 200 at ~30ms each,
   `compress` × 200 at ~25ms each, `send result` × 200 with a wide
-  distribution — most tiny, many *huge*.
+  distribution — a few microsecond sends, median ~170ms, max ~220ms.
 
 ## Root cause
 `results` is an **unbuffered** channel between 8 workers and **one**
@@ -51,8 +52,9 @@ CPU) and `append to archive` (µs of I/O) — serially, for every record it
 receives. Wall-clock throughput is capped at
 `1000ms / 25ms = 40 records/sec`, **regardless of how many workers fetch
 in parallel upstream**. Concurrency upstream of a serial stage is just a
-more expensive queue: workers finish their 30ms fetch, then block for
-seconds on `results <- rec` waiting for the collector to consume.
+more expensive queue: workers finish their 30ms fetch, then block ~200ms
+on `results <- rec` waiting for the collector to consume — over 25 records
+each, that's ~4.3s of blocked time per worker.
 
 ## Walkthrough
 Drive this live. Every step points at something concrete in the tool.
@@ -92,7 +94,7 @@ Drive this live. Every step points at something concrete in the tool.
    | Start location | Count | Total execution time |
    |---|---|---|
    | `main.collector` | 1 | **5.0s** |
-   | `main.worker` | 8 | 7.9ms |
+   | `main.worker` | 8 | ≈6–8ms |
 
    Say aloud: *"The 'parallel' pipeline spends 99.8% of its execution
    time in a single goroutine."* That number alone should tell the room
@@ -100,8 +102,9 @@ Drive this live. Every step points at something concrete in the tool.
 
 6. **View trace by proc.** Zoom out (`s`) so you see the whole run.
    Point at the shape:
-   - First ~250ms: dense overlapping activity across the P rows —
-     8 fetches in flight, working as expected.
+   - First ~30ms: dense overlapping activity across the P rows —
+     8 fetches in flight, working as expected. This is 0.6% of the
+     timeline; zoom in (`w`) or the room won't see it at all.
    - Then it collapses into a **staircase**: one goroutine, running
      back-to-back 25ms slices, on one P at a time. Zoom in (`w`) on a
      stretch of staircase.
@@ -113,13 +116,15 @@ Drive this live. Every step points at something concrete in the tool.
    analysis. Point at:
    - Execution time: tiny.
    - **Block time (chan send)**: enormous — this is where the workers
-     went. They fetch for 30ms, then wait *seconds* to hand off.
+     went. They fetch for 30ms, then wait ~200ms to hand off — 25 times
+     over, so ~4.3s of blocked wall-clock each.
 
 8. **User-defined regions** (`/userregions`). This confirms it beautifully:
    - `fetch` × 200 — bell curve around ~30ms.
    - `compress` × 200 — tight around ~25ms.
-   - `send result` × 200 — a distribution from microseconds to seconds.
-     Some sends were instant; most waited in a growing queue.
+   - `send result` × 200 — a distribution from microseconds to a few
+     hundred milliseconds (median ~170ms, max ~220ms). The first few
+     sends were instant; the rest waited in a saturated queue.
 
 9. **Synchronization blocking profile.** From the landing page, or
    headless:
@@ -192,7 +197,7 @@ again — the defining property of the bug is gone. Reported target of
 Before/after in the viewer — open `io.trace` from both runs:
 - **Goroutine analysis**: `main.worker` execution time now ~5s
   *spread across 8 goroutines* (≈600ms each). `main.collector` execution
-  time drops from 5s to milliseconds (just file writes).
+  time drops from 5s to sub-millisecond (just file writes).
 - **View trace by proc**: the staircase is gone. `compress` regions
   overlap across P rows.
 - **Block time (chan send)** on `main.worker`: collapses.
@@ -203,8 +208,14 @@ Before/after in the viewer — open `io.trace` from both runs:
   (The `main.collector`: 1 with 5.0s execution time in Goroutine
   analysis.)
 - Why did buffering the channel not help? Where did the bottleneck go?
-  (Nowhere — it moved from `chan send` blocking to `chan recv` blocking,
-  same 40 rec/s ceiling.)
+  (Nowhere, and the trace says so precisely. The *workers* stop blocking:
+  `runtime.chansend1` in the sync profile drops from ~38.7s to ~0.75s, they
+  now hand off into a buffer and move on. Throughput is identical, 5.05s and
+  39.6 rec/s, because the ceiling was never the handoff; it's the
+  collector's serial 25ms `compress` per record. All the buffer did was move
+  the queue from "senders parked on a channel" to "records sitting in a
+  buffer", and push main's wait into `WaitGroup.Wait`. A queue in front of a
+  serial stage is still a serial stage.)
 - What's the general shape of "hidden serialization" on the timeline?
   (A staircase: one goroutine running back-to-back slices while others
   sit idle.)
@@ -220,7 +231,7 @@ Before/after in the viewer — open `io.trace` from both runs:
   above, the trace disproves it beautifully. Do the buffered version
   *before* the real fix, not instead of it.
 - **The trace viewer's User Regions page can be slow** on this trace
-  (~600 region events). Give it a moment; don't refresh.
+  (~800 region events). Give it a moment; don't refresh.
 - **`spin()` uses busy-loop CPU** so the compression looks like real
   work in a proc row. If a student's machine is under thermal pressure,
   numbers wobble but the shape doesn't; anchor on shape.

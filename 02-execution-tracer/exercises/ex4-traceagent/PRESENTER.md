@@ -32,8 +32,12 @@ cp scheduling.trace broken.trace
 cd ../ex4-traceagent
 ```
 
-Stage 1 first build downloads two modules (`golang.org/x/exp`, the MCP
-SDK) — one-time network required.
+If the analyzer chokes with `expected batch event, got event 0` (or
+similar), the trace is bad, not the code — ~1 run in 25 produces one.
+Regenerate; see ex1's pitfalls.
+
+Stage 1 first build downloads 8 modules, ~49 MB (`golang.org/x/exp`, the
+MCP SDK and its dependencies) — one-time network required.
 
 Run the un-completed analyzer to see the bookkeeping runs but nothing is
 accounted for:
@@ -111,8 +115,9 @@ appetite allow. Stage 2 is the finale-friendly one.
      **before** `recordStateTime` advances `g.since`.
    - `from == to` transitions are skipped — the tracer re-asserts every
      G's state at generation boundaries (~1/sec). Treating those as real
-     transitions chops a single 563ms sched wait into per-generation
-     ~10ms segments. (This mistake bites.)
+     transitions chops a long wait at those boundaries: the worst sched
+     wait reads as 1.0s instead of 3.3s, the heartbeat as 760ms instead
+     of 2.2s. Still bad-looking, but off by 3–4×. (This mistake bites.)
 
 4. **Baseline run.**
    ```bash
@@ -219,7 +224,7 @@ appetite allow. Stage 2 is the finale-friendly one.
     events."* If time and screen space allow, tile
     `go tool trace ../ex1-scheduling/broken.trace` next to your CLI
     output. The Goroutine analysis page's per-group numbers match the
-    CLI's to the microsecond. That's the trust-building moment.
+    CLI's to within microseconds. That's the trust-building moment.
 
 12. **Show the JSON output.**
     ```bash
@@ -235,6 +240,23 @@ appetite allow. Stage 2 is the finale-friendly one.
     For screens without much vertical space.
 
 ### Stage 2: Hand It to an Agent (workshop finale)
+
+> **Prerequisite, do this before you go on stage.** The two MCP tools are
+> thin wrappers over `analyzer.AnalyzeFile`, so they inherit whatever state
+> the TODOs are in. Against the repo as shipped, `top_blocking` returns
+> `top 10 blocking sites (of 0)` and `analyze_trace` reports all-zero
+> durations, the agent gets an empty report and the finale dies. This bites
+> specifically when Stage 1 was assigned as homework rather than run in the
+> room, which is the default in the run-of-show.
+>
+> ```bash
+> cd 02-execution-tracer/exercises/ex4-traceagent
+> git apply solution.diff        # the three TODOs, exactly as in README.md
+> go run ./cmd/analyze ../ex1-scheduling/broken.trace   # sanity check: real numbers
+> ```
+>
+> Restore the TODOs afterwards with `git apply -R solution.diff` so the
+> exercise ships unsolved.
 
 14. **Frame the payoff.** Everything you just built takes a trace file and
     produces ~a few hundred bytes of structured diagnosis. That fits in
@@ -302,6 +324,10 @@ appetite allow. Stage 2 is the finale-friendly one.
     ```bash
     go run ./cmd/analyze ../ex2-flightrecorder/flightrecorder.trace
     ```
+
+    > Prerequisite: `flightrecorder.trace` is gitignored, so it only
+    > exists if ex2 has actually been run with both TODOs in place. On a
+    > fresh clone this is `no such file`. Run ex2 first, or skip the beat.
 
     On an ex2 snapshot, `top_blocking` surfaces the convoy directly:
 
@@ -377,7 +403,7 @@ for the last-scheduled Gs).
 
 Cross-check: **Same decoder, same events.** Open
 `go tool trace ../ex1-scheduling/broken.trace`, click Goroutine
-analysis, compare the per-group numbers. They match to the microsecond.
+analysis, compare the per-group numbers. They match to within microseconds.
 
 For Stage 2 verification: the MCP `tools/list` response includes both
 `analyze_trace` and `top_blocking`, with descriptions that pin agent
@@ -407,9 +433,11 @@ behavior. `claude mcp list` shows `gotrace: ✓ connected`.
   A woken G is *runnable* first — that gap is scheduler latency, not
   blocking. Mixing them defeats the whole point of the exercise (and of
   the trace viewer).
-- **First build downloads modules.** Two modules on first invocation
-  (`golang.org/x/exp`, the MCP SDK). If the room has no network, do this
-  in setup or bring a pre-warmed module cache.
+- **First build downloads modules.** Eight modules, ~49 MB, on first
+  invocation (`golang.org/x/exp`, the MCP SDK, and its transitive
+  dependencies). At 49 MB × room size this is a real hazard: have the
+  room run `go mod download` in setup, or bring a pre-warmed module cache
+  on a USB stick.
 - **Stage 2 without Claude Code.** The by-hand JSON-RPC demo (step 16)
   is a full substitute; don't skip it if `claude` isn't available. It's
   also how you debug any MCP server.

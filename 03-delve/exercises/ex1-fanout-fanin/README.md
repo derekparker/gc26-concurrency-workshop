@@ -16,11 +16,13 @@ go run .
 ```
 
 ```
-[MONITOR] collected 33/200 results
-[MONITOR] collected 33/200 results
-[MONITOR] collected 33/200 results
+[MONITOR] collected 37/200 results
+[MONITOR] collected 37/200 results
+[MONITOR] collected 37/200 results
 ...forever...
 ```
+
+(The exact number varies 32–40 run to run; the stall itself does not.)
 
 No crash. No `fatal error: all goroutines are asleep`, the monitor
 goroutine keeps a timer alive, so the runtime's deadlock detector never
@@ -64,7 +66,7 @@ dlv attach $(pgrep ingest)
 (dlv) goroutines -group userloc
 ```
 
-Group first, read stacks later. You have ~12 goroutines; the grouping
+Group first, read stacks later. You have ~18 goroutines; the grouping
 collapses them into a handful of lines with counts. Which group holds
 your 8 workers? What wait reason do they show?
 
@@ -82,7 +84,8 @@ look identical, and one will be different. Print all of them in one shot:
 (dlv) goroutines -with userloc mutex.go -t 8
 ```
 
-(`-t 8` prints an 8-frame stack under each matching goroutine.)
+(`-t 8` prints stack frames 0–8 under each matching goroutine — nine lines,
+not eight. Frame 8 is exactly where the tell lives, which is why 8.)
 
 </details>
 
@@ -120,7 +123,7 @@ critical events, the code path was never exercised until then.
 .../main.go:185 in main.main
 	Total: 1                             <- collector: blocked receiving a result
 /usr/local/go/src/runtime/proc.go:463 in runtime.gopark
-	Total: 5                             <- runtime housekeeping, ignore
+	Total: 6                             <- runtime housekeeping, ignore
 /usr/local/go/src/runtime/sema.go:114 in sync.runtime_SemacquireWaitGroup
 	Total: 1                             <- the wg.Wait/close(results) goroutine
 /usr/local/go/src/runtime/time.go:363 in time.Sleep
@@ -214,7 +217,9 @@ INGEST_DEBUG_ADDR=127.0.0.1:8899 ./ingest &
 curl 'http://127.0.0.1:8899/debug/pprof/goroutineleak?debug=1'
 ```
 
-Captured output (verbatim; addresses vary):
+Captured output (addresses vary; runtime frames elided — real stacks also
+carry `internal/sync.(*Mutex).lockSlow` and `sync.(*Mutex).Lock` between
+`runtime_SemacquireMutex` and the `main.*` frame):
 
 ```
 goroutineleak profile: total 11

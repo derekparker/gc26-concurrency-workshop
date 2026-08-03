@@ -40,8 +40,10 @@ the API, the kernel). Try it: bump `numWorkers` to 32. Same 5 seconds.
    adding workers helps again.
 
 ## What to Look For
-- **View trace by proc**: for the first ~250ms, overlapping activity, 8
-  fetches in flight. Then the shape changes: **a staircase**. One goroutine
+- **View trace by proc**: for the first ~30ms — one fetch round, so zoom in
+  (`w`) or you'll miss it — overlapping activity, 8 fetches in flight. Then
+  the shape changes for the remaining 99.4% of the run: **a staircase**.
+  One goroutine
   (`main.collector`) runs continuously, back-to-back 25ms `compress` regions,
   while everything else lies idle in long gaps.
 - **Goroutine analysis** front page, this one table is the whole diagnosis:
@@ -49,13 +51,14 @@ the API, the kernel). Try it: bump `numWorkers` to 32. Same 5 seconds.
   | Start location | Count | Total execution time |
   |---|---|---|
   | `main.collector` | 1 | **5.0s** |
-  | `main.worker` | 8 | 7.9ms |
+  | `main.worker` | 8 | ≈6–8ms |
 
   The "8-way parallel" pipeline spends 99.8% of its execution time in one
   goroutine.
 - **`main.worker` group**: the dominant column is **Block time (chan send)**.
-  The workers fetch for 30ms, then queue for *seconds* to hand off their
-  result. Their `send result` regions dwarf their `fetch` regions.
+  The workers fetch for 30ms, then queue ~170–220ms to hand off each result —
+  which adds up to **~4.3s of blocked time per worker** over its 25 records.
+  Their `send result` regions dwarf their `fetch` regions.
 - **Synchronization blocking profile**: ~38s of cumulative delay in
   `runtime.chansend1` under `main.worker`. In the same profile, everything
   under `main.fetch` (the actual downloads) totals ~6s across all workers,

@@ -102,7 +102,7 @@ that solve most concurrency bugs:
 
 ```
 goroutines -with user            # every user goroutine + its wait reason
-goroutines -group userloc        # 400 goroutines -> 6 lines with counts
+goroutines -group userloc        # 400 goroutines -> 6 groups with counts
 goroutines -chan <expr>          # who is parked on THIS channel?
 goroutine <id> stack             # stack of any goroutine, no switching
 print <ch>                       # channel internals: buffer, sendq, recvq
@@ -294,7 +294,7 @@ is the week you use it.)
 ## Verify Your Setup
 
 ```bash
-cd 03-delve/demo && go build ./... && dlv version
+cd 03-delve/demo && go build -o /dev/null ./... && dlv version
 ```
 
 ## Additional Resources

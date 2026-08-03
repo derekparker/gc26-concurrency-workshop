@@ -40,10 +40,15 @@ cp scheduling.trace broken.trace
 cd ../ex4-traceagent
 ```
 
+> If the analyzer (or `go tool trace`) reports a parse error on your
+> trace — `expected batch event, got event 0` or similar — the trace
+> itself is bad, not your code. It happens to roughly 1 run in 25.
+> Delete it and generate another.
+
 Use the **broken** ex1 program (goroutine-per-batch), if you already fixed
 it, revert your fix first; the whole point is to re-find that bug. The first
-build downloads two modules (`golang.org/x/exp`, the MCP SDK), so this
-exercise needs network once.
+build downloads 8 modules (~49 MB — `golang.org/x/exp`, the MCP SDK and
+its dependencies), so this exercise needs network once.
 
 ## Stage 1: Programmatic Trace Analysis
 
@@ -126,7 +131,8 @@ That's the ex1 diagnosis, computed instead of clicked:
   sched wait **562.93ms**, against a 10ms deadline. The select-block time
   (1.92s, max 35ms per wait) is the legitimate part, waiting for ticks.
 - Sanity check it yourself: open `go tool trace broken.trace` → Goroutine
-  analysis. The numbers match to the microsecond, same decoder, same events.
+  analysis. The numbers match to within microseconds — same decoder, same
+  events.
 
 There's also `-json` (same content, machine-shaped, this is what feeds the
 MCP tool) and `-top N`.
@@ -146,8 +152,8 @@ Two classic mistakes:
 
 Also note the skeleton skips `from == to` transitions for you: the tracer
 re-asserts every goroutine's state at generation boundaries (~1/sec), and if
-you treat those as real transitions, a single 563ms scheduler wait gets
-chopped into harmless-looking ~10ms segments. (Ask us how we know.)
+you treat those as real transitions, a long scheduler wait gets chopped at
+those boundaries — a 3.3s wait reports as 1.0s. (Ask us how we know.)
 </details>
 
 <details>
@@ -197,7 +203,19 @@ func (a *analysis) recordSchedWait(g *gInfo, from, to trace.GoState, ts trace.Ti
 
 ## Stage 2: Hand It to an Agent
 
-`cmd/mcp` is provided complete (~120 lines, read it, it's mostly tool
+> **Stage 2 needs a finished Stage 1.** Both MCP tools are thin wrappers
+> over `analyzer.AnalyzeFile`, so against the un-completed TODOs they
+> return an empty report (`top 10 blocking sites (of 0)`) and the agent has
+> nothing to reason about. If you skipped Stage 1, or want a known-good
+> baseline to demo from, apply the solution:
+>
+> ```bash
+> git apply solution.diff        # from this directory
+> ```
+>
+> Undo it with `git apply -R solution.diff` when you want the TODOs back.
+
+`cmd/mcp` is provided complete (~100 lines, read it, it's mostly tool
 descriptions). It wraps your analyzer in an MCP server over stdio, exposing
 two tools: `analyze_trace(path, format)` and `top_blocking(path, n)`.
 

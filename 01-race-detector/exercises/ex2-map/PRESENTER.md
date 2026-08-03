@@ -103,6 +103,12 @@ Four distinct problems hide in the report:
    even when the map runtime *wouldn't have* — races on maps, races on
    plain fields, all in one pass.
 
+   Note: `-race` doesn't disable the runtime's map guard. Roughly 1 run in
+   6 still dies on `fatal error: concurrent map writes` partway through,
+   before the `Found N data race(s)` summary. If that happens on stage,
+   use it — the tripwire fired first and the detector never got to finish
+   its report — then just re-run.
+
 3. **Group the reports (5 min).** Instead of reading all 80, sort by
    *function*:
 
@@ -122,8 +128,11 @@ Four distinct problems hide in the report:
 4. **The two maps want different tools (3 min).**
 
    - `metrics` map: workload is ~90% writes. `RWMutex` gives you nothing —
-     everyone needs the write lock. `sync.Map` is explicitly documented as
-     the wrong tool for write-heavy counters. Plain `sync.Mutex`.
+     everyone needs the write lock. `sync.Map` documents itself as
+     optimized for two specific patterns (write-once-read-many keys, and
+     disjoint key sets per goroutine) and says it "should not be used for
+     most code" — neither pattern is a write-heavy counter. Plain
+     `sync.Mutex`.
    - `cache` map: read-mostly, keys stable. Many concurrent readers, rare
      writers. `sync.RWMutex` is the shape.
 
@@ -139,6 +148,10 @@ Four distinct problems hide in the report:
    - Drop per-entry hit counts, use the metrics map for hits.
 
 ## Fix
+
+Do this in two passes, the compile error between them is the teaching beat.
+
+### Pass 1, the types and the `Service` methods
 
 ```go
 type Service struct {
@@ -213,6 +226,33 @@ func (s *Service) GetAllMetrics() map[string]int {
 }
 ```
 
+### Pass 2, let the compiler find the remaining readers
+
+Build now and it **fails**, on purpose:
+
+```
+vet: ./main.go:261:5: invalid operation: hitCount2 <= hitCount1
+     (operator <= not defined on struct)
+```
+
+(the exact line number drifts depending on how much of the struct you
+rewrote, the message is what matters)
+
+`verifier` still reads `HitCount` as a plain `int` at `main.go:251` and
+`:259`. Fix both:
+
+```go
+hitCount1 := result1.HitCount.Load()   // main.go:251
+hitCount2 := result2.HitCount.Load()   // main.go:259
+```
+
+**Say this part out loud, it's the point of the exercise:** you changed one
+field's type and the compiler handed you an exhaustive list of every place
+that field is touched. Making a field atomic is a change to its *contract*,
+and the type system enforces the new contract everywhere. Compare that to
+the racy version, where the same field was read from three goroutines and
+nothing complained at all.
+
 Verify — should be clean every run, and the flakiness is gone:
 
 ```bash
@@ -253,7 +293,7 @@ concrete.
   counter. Slower and uglier here.
 - **Locking `GetFromCache` with `RLock` and calling it done.** The
   `HitCount++` race is under `RLock` — `-race` still fires. Students often
-  need a nudge back to the "read at 41 / read at 69" report.
+  need a nudge back to the "write at 41 / read at 69" report.
 - **Locking `RecordMetric` inside `GetFromCache` while holding
   `cacheMu.RLock`.** Two locks, always in the same order, so no deadlock
   here — but flag lock ordering to preempt questions when they see it.

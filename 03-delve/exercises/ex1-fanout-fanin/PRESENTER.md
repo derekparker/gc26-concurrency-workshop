@@ -19,9 +19,9 @@ go run .
 Expected output (repeats forever, no crash, no fatal error):
 
 ```
-[MONITOR] collected 33/200 results
-[MONITOR] collected 33/200 results
-[MONITOR] collected 33/200 results
+[MONITOR] collected 37/200 results
+[MONITOR] collected 37/200 results
+[MONITOR] collected 37/200 results
 ...
 ```
 
@@ -52,7 +52,8 @@ dlv attach $(pgrep ingest)
 already holds. Every other worker then piles up in front of that same
 mutex. `noteCritical` is only reached on critical events; the first one
 in the deterministic event stream is ID 36 (`i%37 == 36`), which is why
-the stall always happens right around "collected 33/200".
+the stall always happens right around "collected 3x/200" (32–40 across
+runs; don't quote a specific number on stage).
 
 One cause → four symptoms visible in the goroutine survey:
 
@@ -75,7 +76,7 @@ One cause → four symptoms visible in the goroutine survey:
 .../main.go:185 in main.main
 	Total: 1                             <- collector: blocked receiving a result
 /usr/local/go/src/runtime/proc.go:463 in runtime.gopark
-	Total: 5                             <- runtime housekeeping, ignore
+	Total: 6                             <- runtime housekeeping, ignore
 /usr/local/go/src/runtime/sema.go:114 in sync.runtime_SemacquireWaitGroup
 	Total: 1                             <- the wg.Wait/close(results) goroutine
 /usr/local/go/src/runtime/time.go:363 in time.Sleep
@@ -87,6 +88,11 @@ One cause → four symptoms visible in the goroutine survey:
 **Say out loud:** every user goroutine is stuck. The story is written
 in the wait reasons. The 8 workers on `sync.Mutex.Lock` are the mass;
 everything else is a downstream symptom.
+
+The transcript above is abridged to the group headers. On screen Delve
+also prints up to 5 sample goroutine lines under each header — and
+*those* lines are the only place the `[sync.Mutex.Lock]` / `[chan send]`
+wait reasons actually appear. Point at them, not at the `Total:` counts.
 
 Goroutine IDs will vary between runs — group and filter by *location*
 or *label*, never by ID.

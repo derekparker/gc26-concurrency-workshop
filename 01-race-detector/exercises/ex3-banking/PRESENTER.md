@@ -24,6 +24,7 @@ Usually clean:
 Opened 8 accounts, total on deposit: 8000
 
 [VIP report] frank (account 6) leads with balance 1290
+[VIP report] carol (account 2) leads with balance 1355
 Teller 2 completed 448 transfers
 ...
 Expected total: 8000
@@ -112,7 +113,9 @@ manifests louder when the window is wide.
    count failures. The book drifts.
 
 2. **`-race` on the guilty code (5 min).** `go run -race .`. Read the
-   *first* report aloud with the students:
+   first `Transfer`-vs-`Transfer` report aloud with the students (report
+   order is nondeterministic and the line numbers vary — any of 70/74/75
+   against 83/84):
 
    ```
    Read at 0x00c0... by goroutine 8:
@@ -229,8 +232,11 @@ AUDIT PASSED: the books balance
   Save it for finish-early students; section 03 will debug deadlocks.
 - **Forgetting `LargestAccount`.** Students fix `RLock`→`Lock` on
   `Transfer`, rerun `-race`, and see a *smaller* pile of reports — but
-  reports remain. They come from `LargestAccount` /`vipReporter`. The
-  race is a pointer leak, not a lock issue.
+  reports remain. Exactly two: `Transfer`'s writes at `main.go:83`/`84`
+  racing `vipReporter`'s read at `main.go:159` — through the pointer
+  `LargestAccount` handed out. Note that `LargestAccount:120` itself is
+  now clean; the leak, not the lock, is what's left. The race is a
+  pointer leak, not a lock issue.
 - **Changing `LargestAccount` to hold the lock across `vipReporter`'s
   usage.** Won't work — the goroutines are separate. Only a *value copy*
   removes the shared state.

@@ -53,14 +53,40 @@ for deck in $DECKS; do
         fi
     done < <(grep -oE '^\.(html|image|background) +[^ ]+' "$deck" | awk '{print $2}')
 
-    # .code targets, ignoring the -edit/-numbers flags and any address suffix.
-    while read -r ref; do
-        [ -z "$ref" ] && continue
+    # .code / .play targets. Addresses may contain spaces (/^func \(x \*T\) f/)
+    # so take the first field as the file and everything after it as the
+    # address. Both halves are checked: present's own error for an address
+    # that matches nothing is not something you want to debug on stage.
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        ref=${line%% *}
+        addr=""
+        [ "$line" != "$ref" ] && addr=${line#* }
+
         if [ ! -f "$dir/$ref" ]; then
             fail "missing .code source: $ref"
+            continue
         fi
-    done < <(grep -oE '^\.(code|play) +(-(edit|numbers) +)*[^ ]+' "$deck" \
-             | sed -E 's/^\.(code|play) +//; s/-(edit|numbers) +//g')
+        [ -z "$addr" ] && continue
+
+        # Split "/start/,/end/" on the comma and check each /regexp/ half.
+        old_ifs=$IFS
+        IFS=','
+        # shellcheck disable=SC2086
+        set -- $addr
+        IFS=$old_ifs
+        for part in "$@"; do
+            case "$part" in
+                /*/)
+                    pat=${part#/}
+                    pat=${pat%/}
+                    grep -qE "$pat" "$dir/$ref" \
+                        || fail "$ref: .code address /$pat/ matches nothing"
+                    ;;
+            esac
+        done
+    done < <(grep -E '^\.(code|play) ' "$deck" \
+             | sed -E 's/^\.(code|play) +//; s/^(-(edit|numbers) +)*//')
 
     # Pipe tables would render as literal text.
     if grep -qE '^\|.*\|' "$deck"; then
@@ -83,7 +109,20 @@ done
 # --- does present actually parse them? ---------------------------------------
 echo
 echo "Parsing with present..."
-PORT=4998
+# Find a free port rather than hardcoding one: if something else already
+# holds it, every deck reports "did not render (HTTP 000)" and the real
+# cause is invisible.
+PORT=""
+for candidate in $(seq 4998 5010); do
+    if ! nc -z 127.0.0.1 "$candidate" 2>/dev/null; then
+        PORT=$candidate
+        break
+    fi
+done
+if [ -z "$PORT" ]; then
+    echo "❌ No free port in 4998-5010 to run present on."
+    exit 1
+fi
 present -notes -play=false -http="127.0.0.1:$PORT" . > /tmp/present-check.log 2>&1 &
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null' EXIT

@@ -29,7 +29,7 @@ actual on shelves:   342 units
   [1] gopher-mug      stock= 36 reserved=0
   [2] gopher-tee      stock= 36 reserved=0
   [3] gopher-cap      stock= 36 reserved=0
-  [4] gopher-pin      stock= 96 reserved=0
+  [4] gopher-pin      stock= 96 reserved=0     <- varies run to run (96-108)
   [5] gopher-sticker  stock= 99 reserved=0
 FAILED: inventory drift of +30 units
 ```
@@ -88,7 +88,7 @@ dlv debug
 (dlv) break main.main
 (dlv) continue
 (dlv) watch -w store.stock[5]
-Watchpoint store.stock[5] set at 0x1049cf8b0
+Watchpoint store.stock[5] set at 0x...
 (dlv) continue
 ```
 
@@ -111,24 +111,28 @@ Verified sequence (goroutine IDs will vary):
 => 138:		store.stock[i] = initialPerItem          <- setup, expected
 
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (goroutine 23)
+> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (hits goroutine(23):1 total:2)
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).Reserve() ./main.go:64 (goroutine 22)
+> watchpoint on [store.stock[5]] main.(*Warehouse).Reserve() ./main.go:64 (hits goroutine(22):1 total:3)
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).Reserve() ./main.go:64 (goroutine 20)
+> watchpoint on [store.stock[5]] main.(*Warehouse).Reserve() ./main.go:64 (hits goroutine(20):1 total:4)
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (goroutine 23)
+> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (hits goroutine(23):2 total:5)
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (goroutine 22)
+> watchpoint on [store.stock[5]] main.(*Warehouse).Take() ./main.go:55 (hits goroutine(22):2 total:6)
 (dlv) print store.stock[5]
 95                                    <- 5 legitimate ops: 100 -> 95. so far so good
 (dlv) continue
-> watchpoint on [store.stock[5]] main.(*Warehouse).releaseExpired() ./main.go:93 (goroutine 19)
+> watchpoint on [store.stock[5]] main.(*Warehouse).releaseExpired() ./main.go:93 (hits goroutine(19):1 total:7)
 (dlv) print store.stock[5]
 99                                    <- WENT UP BY 4. caught red-handed.
 (dlv) stack 3
-0  main.(*Warehouse).releaseExpired   at ./main.go:93
-1  main.main.func1                    at ./main.go:160    <- the janitor goroutine
+0  0x... in main.(*Warehouse).releaseExpired
+   at ./main.go:93
+1  0x... in main.main.func1                       <- the janitor goroutine
+   at ./main.go:160
+2  0x... in runtime.goexit
+   at /usr/local/go/src/runtime/asm_arm64.s:1447
 ```
 
 Note: Delve reports the line *after* the write. The offending
@@ -140,8 +144,8 @@ w.stock[item] = stock[item] + reserved[item]
 
 ### 4. Verify the reasoning at the frame
 
-From the janitor's frame you can inspect the stale snapshot side by
-side with live state:
+From the janitor's frame you can inspect the stale snapshot side by side
+with live state:
 
 ```
 (dlv) frame 0
@@ -150,12 +154,29 @@ side with live state:
 (dlv) print reserved[5]
 2                 <- 2 units held in reservation
 (dlv) print w.stock[5]
-95                <- live: two more sales happened during the scan
+99                <- the stale write already landed: 97 + 2
 ```
 
-The janitor is about to write `97 + 2 = 99`, erasing both sales. Same
-story, higher volume, on items 4 and 0–3: +30 units of phantom
-inventory.
+`99` is the damage, not the setup: the watchpoint fires *after* the store
+on line 92, so by the time you have a prompt the overwrite has happened.
+
+**To show the `95` that got erased, stop before the write instead.** This is
+also more reliable than counting watchpoint hits, the janitor's hit ordinal
+shifts run to run, but the condition below is deterministic:
+
+```
+(dlv) break bw main.go:92
+(dlv) condition bw item == 5
+(dlv) continue
+(dlv) print stock[5]      # 97 — snapshot from 300ms ago
+(dlv) print reserved[5]   # 2  — units held in reservation
+(dlv) print w.stock[5]    # 95 — live: two more sales during the scan
+```
+
+Now the arithmetic is on screen before it executes: the janitor is about to
+write `97 + 2 = 99` over a live value of `95`, erasing both sales. Step once
+and `w.stock[5]` is `99`. Same story, higher volume, on items 4 and 0–3:
++30 units of phantom inventory.
 
 ## Fix
 
@@ -216,11 +237,16 @@ SUCCESS: books balance
 - **Not choosing the target deliberately.** `watch -w store.stock[0]`
   on a fast mover will fire dozens of times before the janitor arrives.
   Lean on the exercise's cover story to justify item 5.
-- **Setting the watchpoint too early.** Before `main.main` runs,
-  `store.stock[5]` doesn't have a stable address. Break on `main.main`
-  (or any point after `store` is initialized) and *then* `watch`.
+- **Setting the watchpoint too early.** Not an address problem — `store`
+  is static data with a perfectly stable address. It's *symbol scope*:
+  until you're stopped in a `main`-package frame, Delve can't resolve the
+  expression at all (`unable to find function context` at entry,
+  `could not find symbol store.stock` in `runtime.main`). Break on
+  `main.main` first, then `watch`.
 - **Only 4 watchpoints.** On amd64 and arm64 you get four hardware
-  registers. Delve will refuse the 5th. In practice you never want
+  registers, and the 5th fails with a raw debugserver error rather than a
+  friendly message: `protocol error E09 during set breakpoint for packet
+  $Z2,1003c1868,8`. Don't be thrown by it. In practice you never want
   more than one or two.
 - **Line reported = line after the write.** Expect `main.go:93` in the
   hit for a write at `main.go:92`. `list` (or the assembly with
@@ -229,4 +255,7 @@ SUCCESS: books balance
   across time is a separate correctness question that no dynamic race
   detector can see.
 - **Attach-mode.** If demoing under `dlv attach`, watchpoints still
-  work; on Linux you may need `sysctl kernel.yama.ptrace_scope=0`.
+  work — but *not* straight off the attach stop, which lands in runtime
+  code. Set a breakpoint in a `main`-package function and `continue` into
+  it first, then `watch`. On Linux you may also need
+  `sysctl kernel.yama.ptrace_scope=0`.

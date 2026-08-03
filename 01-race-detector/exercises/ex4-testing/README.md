@@ -53,17 +53,23 @@ go test -race
 ```
 ==================
 WARNING: DATA RACE
-Read at 0x00c0001be208 by goroutine 12:
+Read at 0x00c0001be208 by goroutine 14:
   ttlcache.(*Cache).Get()
       .../ex4-testing/ttlcache.go:61 +0x194
   ttlcache.TestConcurrentAccess.func1()
       .../ex4-testing/ttlcache_test.go:50 +0x104
-  sync.(*WaitGroup).Go.func1()
-      /usr/local/go/src/sync/waitgroup.go:258 +0x54
 
-Previous write at 0x00c0001be208 by goroutine 14:
+Previous write at 0x00c0001be208 by goroutine 13:
   ttlcache.(*Cache).Get()
       .../ex4-testing/ttlcache.go:61 +0x1a8
+  ttlcache.TestConcurrentAccess.func1()
+      .../ex4-testing/ttlcache_test.go:50 +0x104
+
+Goroutine 14 (running) created at:
+  sync.(*WaitGroup).Go()
+      /usr/local/go/src/sync/waitgroup.go:238 +0x6c
+  testing.tRunner()
+      /usr/local/go/src/testing/testing.go:2036 +0x164
   ...
 ==================
 --- FAIL: TestConcurrentAccess (0.16s)
