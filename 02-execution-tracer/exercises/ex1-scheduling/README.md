@@ -20,7 +20,8 @@ processed 1000 batches in 3.1s
 heartbeat interval: target 10ms | p50 11ms | p99 1.314s | max 1.314s
 ```
 
-p50 looks fine. p99 is catastrophic, and it varies wildly between runs
+p50 is unremarkable — 10–20ms against a 10ms target. p99 is catastrophic,
+and it varies wildly between runs
 (sometimes 60ms, sometimes over 2s). Classic "fast on average, terrible tail":
 invisible in logs, invisible in CPU profiles, because the heartbeat goroutine
 isn't *doing* anything slowly, it's **not being run at all**.
@@ -43,10 +44,11 @@ isn't *doing* anything slowly, it's **not being run at all**.
 
 ## What to Look For
 - **Goroutine analysis → `main.heartbeat`**: look at the columns. On a bad
-  run you'll see something like: Total 3.1s, Execution time ~300µs, Block
-  time (select) ~1s, that part is legitimate, it's waiting for the next
-  tick, and **Sched wait time ~2.2s**. The goroutine was *runnable*,
-  awake, ready, asking for CPU, for two-thirds of its life.
+  run you'll see something like: Total ~3s, Execution time a few hundred
+  µs, Block time (select) ~1.5–2s, that part is legitimate, it's waiting
+  for the next tick, and **Sched wait time ~1–2s**. The goroutine was
+  *runnable*, awake, ready, asking for CPU, for a third to a half of its
+  life — and it did roughly 300µs of actual work in that time.
 - **View trace by proc**: every processor row is a solid wall of batch
   goroutine slices. Zoom in (`w`): thousands of tiny slices as the scheduler
   round-robins 1000 runnable goroutines. Find a heartbeat slice and measure
@@ -115,8 +117,9 @@ Measured on an M-series laptop (your numbers will vary):
 
 Same throughput, tail latency rescued. The `GOMAXPROCS-1` row is the going
 further: leaving one processor's worth of headroom buys the heartbeat nearly
-perfect latency for ~7% throughput, a real tradeoff you can now *see* and
-justify with two trace screenshots.
+perfect latency for a few percent of throughput — the run-to-run ranges
+actually overlap, so treat it as "cheap" rather than a measured 7%. It's a
+real tradeoff you can now *see* and justify with two trace screenshots.
 
 Verify in the new trace: `main.heartbeat`'s Sched wait time collapses to
 milliseconds, and the goroutine count drops from ~1000 to ~10.
@@ -126,3 +129,9 @@ milliseconds, and the goroutine count drops from ~1000 to ~10.
 "Runnable" is the most underrated state in the trace viewer. CPU profilers
 sample *running* code; logs record what *ran*. Only the tracer records the
 time between "ready" and "running", and that's where tail latency hides.
+
+You could afford to wrap the whole run in `trace.Start` here because the
+failure is reproducible on demand: run it a few times, catch a bad p99, done.
+A production incident that surfaces twice an hour and is gone by the time you
+open a dashboard isn't so cooperative, and you can't leave `trace.Start`
+running for hours hoping to catch it. That's exercise 2.

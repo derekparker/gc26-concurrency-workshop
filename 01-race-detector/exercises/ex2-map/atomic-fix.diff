@@ -1,0 +1,22 @@
+diff --git i/01-race-detector/exercises/ex2-map/main.go w/01-race-detector/exercises/ex2-map/main.go
+index b3ced71..56b3ef8 100644
+--- i/01-race-detector/exercises/ex2-map/main.go
++++ w/01-race-detector/exercises/ex2-map/main.go
+@@ -266,7 +266,7 @@ func verifier(svc *Service, wg *sync.WaitGroup) {
+ 	// Verify hit counts are incrementing
+ 	key := testKeys[0]
+ 	result1, _ := svc.GetFromCache(key)
+-	hitCount1 := result1.HitCount
++	hitCount1 := result1.HitCount.Load()
+ 
+ 	// Access it a few more times
+ 	for range 5 {
+@@ -274,7 +274,7 @@ func verifier(svc *Service, wg *sync.WaitGroup) {
+ 	}
+ 
+ 	result2, _ := svc.GetFromCache(key)
+-	hitCount2 := result2.HitCount
++	hitCount2 := result2.HitCount.Load()
+ 
+ 	if hitCount2 <= hitCount1 {
+ 		fmt.Printf("[Verifier] Error: Hit count not incrementing properly for %s (was %d, now %d)\n",

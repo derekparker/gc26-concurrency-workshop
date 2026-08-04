@@ -5,8 +5,8 @@
 ## Problem
 
 A build dispatcher: 3 workers, a `jobs` channel, a `reports` channel,
-both buffered "generously". The unit tests (4 jobs) pass. A realistic
-batch of 12 jobs dies instantly:
+both buffered "generously". The original 4-job smoke test passes. A
+realistic batch of 12 jobs dies instantly:
 
 ```bash
 go run .
@@ -26,9 +26,14 @@ goal of this exercise is to come away fluent in what `print <channel>`
 tells you. Then fix it so all 12 jobs build:
 
 ```
-job 12 finished in 10.5ms
+job 11 finished in 11ms
 build complete
 ```
+
+Reports come back from 3 workers out of order, so the *last* line is
+whichever job happened to finish last — usually 11, sometimes 10 or 12.
+Twelve `finished in` lines and `build complete` is the pass condition, not
+the final job ID.
 
 Rules of engagement: you may *only* look at the source **after** you can
 answer these three questions from Delve alone:
@@ -93,6 +98,10 @@ these four commands hand you every edge.
 
 ### Walkthrough (verified transcript)
 
+Goroutine IDs vary between runs — the *structure* below is what's stable,
+not the specific numbers. Delve 1.27 also renders structs across multiple
+lines; the one-line forms here are compressed to fit.
+
 Main is a sender, not a receiver:
 
 ```
@@ -131,9 +140,11 @@ The buffer isn't opaque, those are real values you can read:
 ]
 ```
 
-(Ring-buffer order, `sendx`/`recvx` are the wrap indices.) Jobs 6–9 are
-stuck in the buffer. In a real system this is how you learn *which* work
-items are trapped in a wedged queue, which tenant, which request IDs.
+(Ring-buffer order, `sendx`/`recvx` are the wrap indices. The rotation
+depends on how many early sends went straight to a parked worker; the
+contents 6–9 are invariant.) Jobs 6–9 are stuck in the buffer. In a real
+system this is how you learn *which* work items are trapped in a wedged
+queue, which tenant, which request IDs.
 
 ```
 (dlv) print reports
@@ -161,8 +172,8 @@ The picture, entirely from channel state:
   never dispatched
 
 The bug is the **phased design**: "dispatch everything, then collect
-everything" only works if `len(batch) <= buffers + workers`. The unit
-tests' 4 jobs fit; 12 don't. Buffer sizes chosen from a "typical burst"
+everything" only works if `len(batch) <= buffers + workers`. The smoke
+test's 4 jobs fit; 12 don't. Buffer sizes chosen from a "typical burst"
 are a time bomb.
 
 ### The fix
@@ -183,10 +194,15 @@ for range batch {
 }
 ```
 
-...or keep dispatch in main and collect in a goroutine. Either breaks the
-cycle. Growing the buffers to 12 also "fixes" this batch, ask yourself
-what happens with batch 13. (Buffers change *when* senders block, never
-*whether* a missing receiver deadlocks you.)
+...or keep dispatch in main and collect in a goroutine. That one works too,
+but only if you start the collector *before* the dispatch loop and make
+`main` wait for it (a `sync.WaitGroup`). Put the goroutine where the Phase-2
+loop used to be and you deadlock in exactly the same place, main never gets
+that far. Forget the wait and `main` exits before a single report prints.
+
+Growing the buffers to 12 also "fixes" this batch, ask yourself what happens
+with batch 13. (Buffers change *when* senders block, never *whether* a
+missing receiver deadlocks you.)
 
 </details>
 

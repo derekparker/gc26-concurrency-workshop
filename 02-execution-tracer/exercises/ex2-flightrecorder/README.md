@@ -33,7 +33,10 @@ in-memory ring buffer. It costs ~1–2% CPU, writes nothing to disk, and on
 demand dumps the window, i.e. *the recent past*, to a file.
 
 ## Your Task
-1. **TODO 1** in `main.go`: create and start a flight recorder.
+1. **TODO 1** in `main.go`: create and start a flight recorder. Note that
+   `fr` is *assigned* here, not declared — you need a package-level
+   `var fr *trace.FlightRecorder` (and a `var snapshotOnce sync.Once` for
+   TODO 2), or this won't compile.
    ```go
    fr = trace.NewFlightRecorder(trace.FlightRecorderConfig{
        MinAge:   5 * time.Second, // keep >= the last 5s of trace...
@@ -57,8 +60,11 @@ demand dumps the window, i.e. *the recent past*, to a file.
    whom*.
 
 ## What You Should See in the Snapshot
-- The snapshot covers only the last ~5s of the run, you shipped a few
-  hundred KB instead of a whole-run trace, and it contains the incident.
+- The snapshot covers only the last ~5s of the run — under a megabyte —
+  and it contains the incident. At this toy scale a whole-run
+  `trace.Start` is only ~1.8 MB, so the saving looks small; scale the run
+  to an hour of uptime and it's the difference between a file you attach
+  to a ticket and one you never capture at all.
 - **View trace by proc**: seconds of normal request confetti, then a ~270ms
   stretch where the request rows go quiet and one goroutine runs
   uninterrupted. Click it: `main.(*service).refresher`, inside a
@@ -108,7 +114,6 @@ if elapsed > slowThreshold && fr.Enabled() {
 			log.Printf("writing snapshot: %v", err)
 			return
 		}
-		fr.Stop()
 		log.Printf("wrote flight recorder snapshot to flightrecorder.trace")
 	})
 }

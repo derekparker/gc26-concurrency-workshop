@@ -16,11 +16,13 @@ go run .
 ```
 
 ```
-[MONITOR] collected 33/200 results
-[MONITOR] collected 33/200 results
-[MONITOR] collected 33/200 results
+[MONITOR] collected 37/200 results
+[MONITOR] collected 37/200 results
+[MONITOR] collected 37/200 results
 ...forever...
 ```
+
+(The exact number varies 32–40 run to run; the stall itself does not.)
 
 No crash. No `fatal error: all goroutines are asleep`, the monitor
 goroutine keeps a timer alive, so the runtime's deadlock detector never
@@ -64,7 +66,7 @@ dlv attach $(pgrep ingest)
 (dlv) goroutines -group userloc
 ```
 
-Group first, read stacks later. You have ~12 goroutines; the grouping
+Group first, read stacks later. You have ~18 goroutines; the grouping
 collapses them into a handful of lines with counts. Which group holds
 your 8 workers? What wait reason do they show?
 
@@ -82,7 +84,8 @@ look identical, and one will be different. Print all of them in one shot:
 (dlv) goroutines -with userloc mutex.go -t 8
 ```
 
-(`-t 8` prints an 8-frame stack under each matching goroutine.)
+(`-t 8` prints stack frames 0–8 under each matching goroutine — nine lines,
+not eight. Frame 8 is exactly where the tell lives, which is why 8.)
 
 </details>
 
@@ -120,7 +123,7 @@ critical events, the code path was never exercised until then.
 .../main.go:185 in main.main
 	Total: 1                             <- collector: blocked receiving a result
 /usr/local/go/src/runtime/proc.go:463 in runtime.gopark
-	Total: 5                             <- runtime housekeeping, ignore
+	Total: 6                             <- runtime housekeeping, ignore
 /usr/local/go/src/runtime/sema.go:114 in sync.runtime_SemacquireWaitGroup
 	Total: 1                             <- the wg.Wait/close(results) goroutine
 /usr/local/go/src/runtime/time.go:363 in time.Sleep
@@ -184,31 +187,39 @@ re-locking, your invariants are already unclear (see Russ Cox's classic
 
 </details>
 
-## Stretch: Go 1.26's Goroutine Leak Profile
+## Stretch: The Goroutine Leak Profile
 
-Go 1.26 ships an **experimental** goroutine *leak* profile, a pprof
-profile that reports only goroutines the runtime has proven can never
-wake up. Detection rides on the garbage collector: if a goroutine is
-blocked on a channel/mutex/etc. that is unreachable from any runnable
-goroutine (or anything a runnable goroutine could unblock), it's leaked.
-A goroutine in `time.Sleep` (our monitor) or `IO wait` will wake up, so
-it never appears, which is exactly the noise the plain `goroutine`
-profile makes you filter by hand.
+Go ships a goroutine *leak* profile, a pprof profile that reports only
+goroutines the runtime has proven can never wake up. Detection rides on
+the garbage collector: if a goroutine is blocked on a channel/mutex/etc.
+that is unreachable from any runnable goroutine (or anything a runnable
+goroutine could unblock), it's leaked. A goroutine in `time.Sleep` (our
+monitor) or `IO wait` will wake up, so it never appears, which is
+exactly the noise the plain `goroutine` profile makes you filter by hand.
 
-It's gated behind a **build-time** experiment; the profile is named
-`goroutineleak` (`runtime/pprof.Lookup("goroutineleak")`, or
-`/debug/pprof/goroutineleak` once you import `net/http/pprof`). This
+The profile is named `goroutineleak`
+(`runtime/pprof.Lookup("goroutineleak")`, or
+`/debug/pprof/goroutineleak` once you import `net/http/pprof`). In
+**Go 1.26** it's an experiment gated at build time; in **Go 1.27** it's
+generally available and the `GOEXPERIMENT` setting is deleted. This
 program has a production-style opt-in debug endpoint for exactly this,
 set `INGEST_DEBUG_ADDR`:
 
 ```bash
+# Go 1.26 — the GOEXPERIMENT prefix is required:
 GOEXPERIMENT=goroutineleakprofile go build -gcflags='all=-N -l' -o ingest .
+
+# Go 1.27 and later — drop the prefix:
+go build -gcflags='all=-N -l' -o ingest .
+
 INGEST_DEBUG_ADDR=127.0.0.1:8899 ./ingest &
 # wait for the MONITOR lines to start repeating (~5s), then:
 curl 'http://127.0.0.1:8899/debug/pprof/goroutineleak?debug=1'
 ```
 
-Captured output (verbatim; addresses vary):
+Captured output (addresses vary; runtime frames elided — real stacks also
+carry `internal/sync.(*Mutex).lockSlow` and `sync.(*Mutex).Lock` between
+`runtime_SemacquireMutex` and the `main.*` frame):
 
 ```
 goroutineleak profile: total 11
@@ -251,10 +262,11 @@ Delve says WHY.**
 
 Caveats worth saying out loud:
 
-- **Experimental, build-time flag.** Without the `GOEXPERIMENT` build the
-  endpoint 404s (`Unknown profile`). The runtime work is done; the
-  experiment is about the API shape, and the plan of record is on-by-default
-  in Go 1.27.
+- **On Go 1.26, it's a build-time flag.** Without the `GOEXPERIMENT` build
+  the endpoint 404s (`Unknown profile`). The runtime work was already done;
+  the experiment was only about the API shape. Go 1.27 makes the profile
+  generally available and deletes the `goroutineleakprofile` GOEXPERIMENT
+  setting, so on 1.27+ the flag is not just unnecessary, it's gone.
 - Detection is *conservative*: it can miss leaks whose primitive stays
   reachable from a global or from a runnable goroutine's locals. Absence
   of proof isn't proof of absence.

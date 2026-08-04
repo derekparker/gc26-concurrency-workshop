@@ -27,8 +27,8 @@ go run .
 After ~2.5 seconds of healthy-looking logs:
 
 ```
-20:27:35.040 [SHIPPER] Shipped 10 orders so far
-20:27:35.040 [SHIPPER] Shipped maximum orders (10), shutting down
+11:41:33.948775 [SHIPPER] Shipped 10 orders so far
+11:41:33.948775 [SHIPPER] Shipped maximum orders (10), shutting down
 fatal error: all goroutines are asleep - deadlock!
 
 goroutine 1 [chan send]:
@@ -65,9 +65,16 @@ flags, expect `Warning: debugging optimized function` and some
 Let it run. After ~2.5s Delve stops **automatically**:
 
 ```
-20:27:35 [SHIPPER] Shipped maximum orders (10), shutting down
-> [runtime-fatal-throw] runtime.fatal() /usr/local/go/src/runtime/panic.go:1241 (hits total:1)
+11:41:33.948775 [SHIPPER] Shipped maximum orders (10), shutting down
+> [runtime-fatal-throw] runtime.fatal() /usr/local/go/src/runtime/panic.go:1241 (hits total:1) (PC: 0x10270b190)
+Warning: debugging optimized function
+=>1241:	func fatal(s string) {
 ```
+
+The `Warning: debugging optimized function` is about `runtime.fatal`, not
+your code — the runtime is always built optimized, so you'll see this on
+runtime frames even in a `-N -l` build. It reappears after `goroutine 1`
+and `frame 3`. Nothing is wrong.
 
 Delve pre-sets internal breakpoints on `runtime-fatal-throw` and
 `unrecovered-panic`, so a fatal error is not a crash, it's a **breakpoint**.
@@ -84,7 +91,7 @@ attaching to the running process with `dlv attach <pid>`.
 ```
 
 ```
-* Goroutine 1 - User: ./pipeline.go:164 main.(*Pipeline).SendOrder (0x104c040c8) [chan send]
+  Goroutine 1 - User: ./pipeline.go:164 main.(*Pipeline).SendOrder (0x104c040c8) [chan send]
   Goroutine 5 - User: ./pipeline.go:101 main.(*Pipeline).validator.func1 (0x104c03480) [chan send]
   Goroutine 6 - User: ./pipeline.go:127 main.(*Pipeline).processor.func1 (0x104c0397c) [chan send]
   Goroutine 7 - User: ./pipeline.go:127 main.(*Pipeline).processor.func1 (0x104c0397c) [chan send]
@@ -109,20 +116,37 @@ line:
 
 ```
 .../pipeline.go:101 in main.(*Pipeline).validator.func1
+	  Goroutine 7 - User: ./pipeline.go:101 main.(*Pipeline).validator.func1 (0x1042bab50) [chan send]
 	Total: 1
+
 .../pipeline.go:127 in main.(*Pipeline).processor.func1
+	  Goroutine 8 - User: ./pipeline.go:127 main.(*Pipeline).processor.func1 (0x1042bb04c) [chan send]
+	  Goroutine 9 - User: ./pipeline.go:127 main.(*Pipeline).processor.func1 (0x1042bb04c) [chan send]
 	Total: 2
+
 .../pipeline.go:164 in main.(*Pipeline).SendOrder
+	  Goroutine 1 - User: ./pipeline.go:164 main.(*Pipeline).SendOrder (0x1042bb798) [chan send]
 	Total: 1
+
 .../pipeline.go:76 in main.(*Pipeline).receiver.func1
+	  Goroutine 11 - User: ./pipeline.go:76 main.(*Pipeline).receiver.func1 (0x1042ba678) [chan send]
 	Total: 1
+
 /usr/local/go/src/runtime/proc.go:463 in runtime.gopark
+	  Goroutine 2 - User: ... runtime.gopark (0x10425da80) [force gc (idle)]
+	  Goroutine 3 - User: ... runtime.gopark (0x10425da80) [GC sweep wait]
+	  Goroutine 4 - User: ... runtime.gopark (0x10425da80) [GC scavenge wait]
+	  Goroutine 5 - User: ... runtime.gopark (0x10425da80) [GOMAXPROCS updater (idle)]
+	  Goroutine 6 - User: ... runtime.gopark (0x10425da80) [finalizer wait]
 	Total: 5
 ```
 
-One line per *place* the program is stuck, with counts. This is the single
-highest-value command for concurrency debugging, in a real service this
-turns 400 goroutines into 6 lines.
+One *group* per place the program is stuck, each with a count and up to five
+example goroutines (Delve caps the sample at five; the `Total` is the real
+number). This is the single highest-value command for concurrency debugging:
+in a real service it turns 400 goroutines into six groups you can read on one
+screen. Note the wait reasons in brackets on the member lines, `[chan send]`
+five times over is the shape of a stalled pipeline.
 
 The pipeline also labels its workers with pprof labels
 (`pprof.Do(ctx, pprof.Labels("job", "processor"), ...)`), which Delve
@@ -133,13 +157,30 @@ understands:
 ```
 
 ```
+job=
+	  Goroutine 1 - User: ./pipeline.go:164 main.(*Pipeline).SendOrder (0x1049ef798) [chan send]
+	  Goroutine 2 - User: ... runtime.gopark (0x104991a80) [force gc (idle)]
+	  Goroutine 3 - User: ... runtime.gopark (0x104991a80) [GC sweep wait]
+	  Goroutine 4 - User: ... runtime.gopark (0x104991a80) [GC scavenge wait]
+	  Goroutine 17 - User: ... runtime.gopark (0x104991a80) [GOMAXPROCS updater (idle)]
+	Total: 6
+
 job=processor
+	  Goroutine 20 - User: ./pipeline.go:127 main.(*Pipeline).processor.func1 (0x1049ef04c) [chan send]
+	  Goroutine 21 - User: ./pipeline.go:127 main.(*Pipeline).processor.func1 (0x1049ef04c) [chan send]
 	Total: 2
+
 job=receiver
+	  Goroutine 23 - User: ./pipeline.go:76 main.(*Pipeline).receiver.func1 (0x1049ee678) [chan send]
 	Total: 1
+
 job=validator
+	  Goroutine 19 - User: ./pipeline.go:101 main.(*Pipeline).validator.func1 (0x1049eeb50) [chan send]
 	Total: 1
 ```
+
+The leading `job=` bucket is everything *without* the label: `main` plus the
+runtime's own goroutines. Nothing you labelled is in there.
 
 Notice what's missing from that list: there is no `job=shipper` group. The
 shipper is *gone*, remember that for step 5.
@@ -165,6 +206,10 @@ shipper is *gone*, remember that for step 5.
    at ./pipeline.go:164
 4  0x0000000103098618 in main.main
    at ./pipeline.go:208
+5  0x0000000102ffd0b4 in runtime.main
+   at /usr/local/go/src/runtime/proc.go:290
+6  0x0000000103030274 in runtime.goexit
+   at /usr/local/go/src/runtime/asm_arm64.s:1447
 ```
 
 Move to the first *user* frame and look around:
@@ -192,16 +237,20 @@ who is stuck on each channel:
 ```
 (dlv) goroutines -chan p.incoming
 * Goroutine 1 - User: ./pipeline.go:164 main.(*Pipeline).SendOrder [chan send]
+[1 goroutines]
 
 (dlv) goroutines -chan p.validation
   Goroutine 9 - User: ./pipeline.go:76 main.(*Pipeline).receiver.func1 [chan send]
+[1 goroutines]
 
 (dlv) goroutines -chan p.processing
   Goroutine 5 - User: ./pipeline.go:101 main.(*Pipeline).validator.func1 [chan send]
+[1 goroutines]
 
 (dlv) goroutines -chan p.shipping
   Goroutine 6 - User: ./pipeline.go:127 main.(*Pipeline).processor.func1 [chan send]
   Goroutine 7 - User: ./pipeline.go:127 main.(*Pipeline).processor.func1 [chan send]
+[2 goroutines]
 ```
 
 Four commands, and the entire deadlock chain is mapped:
@@ -305,7 +354,7 @@ From that stopped frame:
 (dlv) watch -w shipped
 Watchpoint shipped set at 0x3fd32d54fbd8
 (dlv) continue
-> watchpoint on [shipped] main.(*Pipeline).shipper.func1() ./pipeline.go:151 (hits goroutine(10):1 total:1)
+> watchpoint on [shipped] main.(*Pipeline).shipper.func1() ./pipeline.go:151 (hits goroutine(8):1 total:1)
 ```
 
 Hardware watchpoint: the CPU stops the program on any write to that
@@ -314,10 +363,20 @@ fields, slice elements. This is the star of exercise 3.
 
 ### Tracepoints, printf debugging without the printf
 
+**`restart` first.** `shipper` is called exactly once, from `Start()`
+(`pipeline.go:61`), so by the time you're stopped at the 10th shipment it
+has long since been called and a tracepoint set now would never fire. (The
+same is true of `SendOrder`: main is already wedged sending order 18 at
+this point, so nothing further gets called either. Once the pipeline is
+deadlocked, tracepoints have nothing left to observe, which is worth
+noting.)
+
 ```
+(dlv) restart
 (dlv) trace shiptrace main.(*Pipeline).shipper
 (dlv) continue
-> goroutine(8): [shiptrace] main.(*Pipeline).shipper((*main.Pipeline)(0x1cfe668ca080))
+> goroutine(9): [shiptrace] main.(*Pipeline).shipper((*main.Pipeline)(0x13d175226080))
+>> goroutine(9): main.(*Pipeline).shipper => ()
 ```
 
 Non-stopping breakpoints: a notification per hit, execution continues.
@@ -333,8 +392,8 @@ dlv trace --timestamp 'SendOrder'
 ```
 
 ```
-2026-07-14T16:45:17.062-07:00 > goroutine(1): main.(*Pipeline).SendOrder((*main.Pipeline)(0x73aae55a080), main.Order {ID: 1, Priority: 3, ...})
-2026-07-14T16:45:17.081-07:00 >> goroutine(1): main.(*Pipeline).SendOrder => ()
+2026-07-31T12:06:55.123494-07:00 > goroutine(1): main.(*Pipeline).SendOrder((*main.Pipeline)(0x73aae55a080), main.Order {ID: 1, Priority: 3, ...})
+2026-07-31T12:06:55.142870-07:00 >> goroutine(1): main.(*Pipeline).SendOrder => ()
 ```
 
 Every call, with arguments and return, timestamped, zero code changes.
@@ -346,21 +405,48 @@ the trace itself. (`--follow-calls <depth>` traces callees too.)
 From any stopped Delve session:
 
 ```
-(dlv) dump ./pipeline.core
+(dlv) dump /tmp/pipeline.core
 ```
 
-Later, different terminal, different day, teammate's machine of the same
-platform:
+Delve's `dump` writes a full memory image, and on macOS that means Go's
+entire reserved virtual arena: this 6 MB toy program produces a **~6.4 GB
+core and takes about a minute** of scrolling `Dumping memory ...`. Same
+program on Linux is 48 MB in 2.5 seconds, because Linux only writes mapped
+pages. Dump to `/tmp`, not into the repo.
+
+So rather than sit through that, we ship one:
 
 ```bash
-dlv core ./pipeline ./pipeline.core
+cd linux-core
+dlv core ./pipeline.linux-amd64 ./pipeline.linux-amd64.core
+(dlv) config substitute-path delve-demo ..
 (dlv) goroutines -with user      # the whole deadlock, preserved
+(dlv) goroutine 1
+(dlv) frame 3
+(dlv) print order.ID             # 18
+(dlv) goroutines -chan p.shipping
 ```
 
-`dlv core` also reads Linux ELF cores (`GOTRACEBACK=crash` + `ulimit -c
-unlimited` on a crashed service) and Windows minidumps. On macOS, Delve's
-own `dump` is the supported path. Note the dump is a full memory image,
-gigabytes for a big process.
+That core was captured on **linux/amd64** and you are almost certainly
+reading it on **darwin/arm64**. Post-mortem debugging doesn't need a live
+process, so neither the OS nor the architecture has to match, which is the
+whole point: a core from a production Linux box is something you can open
+on your laptop. The `substitute-path` line remaps the build-time source
+path (`delve-demo/`, from `-trimpath`) onto this checkout so `frame` shows
+real source.
+
+`dlv core` also reads OS-generated Linux ELF cores (`GOTRACEBACK=crash` +
+`ulimit -c unlimited` on a crashed service) and Windows minidumps. On
+macOS, Delve's own `dump` is the only supported path.
+
+## Dry-Run Note
+
+If you script any of this — piping a canned command list into `dlv debug`
+to run it non-interactively — Delve refuses a non-TTY stdin with *"Stdin
+is not a terminal, use '-r' to specify redirects"*. Add
+`--allow-non-terminal-interactive=true` to the `dlv` invocation. This only
+matters for scripted automation, not for working through the commands
+yourself at the prompt.
 
 ## Questions worth sitting with
 
@@ -387,7 +473,8 @@ print statements interleave" chaos.
 **"Can I use this on a running production process?"** `dlv attach <pid>`,
 see the section README. Attaching pauses the process only while you're
 stopped at a prompt; `quit` offers to leave it running (answer `n` to the
-kill prompt, or detach). Be deliberate about stopping the world in prod.
+kill prompt — answering `n` *is* the detach; there's no separate `detach`
+command). Be deliberate about stopping the world in prod.
 
 **"What about goroutines that already exited, like the shipper?"** Gone,
 a debugger sees present state, not history. If you need history, that's

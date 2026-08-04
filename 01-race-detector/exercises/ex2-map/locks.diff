@@ -1,0 +1,81 @@
+diff --git i/01-race-detector/exercises/ex2-map/main.go w/01-race-detector/exercises/ex2-map/main.go
+index b706944..e8b6a5f 100644
+--- i/01-race-detector/exercises/ex2-map/main.go
++++ w/01-race-detector/exercises/ex2-map/main.go
+@@ -12,10 +12,12 @@ import (
+ type Service struct {
+ 	// cache stores expensive computation results - read frequently after initial computation
+ 	// Keys are stable (user IDs, computation keys)
+-	cache map[string]*CachedResult
++	cacheMu sync.RWMutex
++	cache   map[string]*CachedResult
+ 
+ 	// metrics tracks real-time metrics - written frequently, read occasionally
+-	metrics map[string]int
++	metricsMu sync.Mutex
++	metrics   map[string]int
+ }
+ 
+ // CachedResult represents an expensive computation result
+@@ -36,7 +38,11 @@ func NewService() *Service {
+ // GetFromCache retrieves a cached value or computes and caches it
+ func (s *Service) GetFromCache(key string) (*CachedResult, bool) {
+ 	// Check if value exists in cache
+-	if result, exists := s.cache[key]; exists {
++	s.cacheMu.RLock()
++	result, exists := s.cache[key]
++	s.cacheMu.RUnlock()
++
++	if exists {
+ 		// Increment hit count
+ 		result.HitCount++
+ 		s.RecordMetric("cache.hits")
+@@ -49,6 +55,8 @@ func (s *Service) GetFromCache(key string) (*CachedResult, bool) {
+ 
+ // StoreInCache stores a computed value in the cache
+ func (s *Service) StoreInCache(key string, value string) {
++	s.cacheMu.Lock()
++	defer s.cacheMu.Unlock()
+ 	s.cache[key] = &CachedResult{
+ 		Value:      value,
+ 		ComputedAt: time.Now(),
+@@ -58,12 +66,16 @@ func (s *Service) StoreInCache(key string, value string) {
+ 
+ // InvalidateCacheEntry removes a cache entry (rare operation)
+ func (s *Service) InvalidateCacheEntry(key string) {
++	s.cacheMu.Lock()
+ 	delete(s.cache, key)
++	s.cacheMu.Unlock()
+ 	s.RecordMetric("cache.invalidations")
+ }
+ 
+ // GetCacheStats returns cache statistics
+ func (s *Service) GetCacheStats() (entries int, totalHits int) {
++	s.cacheMu.RLock()
++	defer s.cacheMu.RUnlock()
+ 	for _, result := range s.cache {
+ 		entries++
+ 		totalHits += result.HitCount
+@@ -73,16 +85,22 @@ func (s *Service) GetCacheStats() (entries int, totalHits int) {
+ 
+ // RecordMetric increments a metric counter (called very frequently)
+ func (s *Service) RecordMetric(metric string) {
++	s.metricsMu.Lock()
+ 	s.metrics[metric]++
++	s.metricsMu.Unlock()
+ }
+ 
+ // GetMetric reads a metric value (called occasionally)
+ func (s *Service) GetMetric(metric string) int {
++	s.metricsMu.Lock()
++	defer s.metricsMu.Unlock()
+ 	return s.metrics[metric]
+ }
+ 
+ // GetAllMetrics returns a snapshot of all metrics (called rarely)
+ func (s *Service) GetAllMetrics() map[string]int {
++	s.metricsMu.Lock()
++	defer s.metricsMu.Unlock()
+ 	result := make(map[string]int)
+ 	maps.Copy(result, s.metrics)
+ 	return result

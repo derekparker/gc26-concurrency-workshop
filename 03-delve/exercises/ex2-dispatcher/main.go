@@ -2,7 +2,7 @@
 // gathers the build reports.
 //
 // The channels are buffered "generously" for a typical burst of jobs, and
-// the whole thing worked fine in the unit tests (which used 4 jobs).
+// the whole thing worked fine in the smoke test (which used 4 jobs).
 //
 // SYMPTOM: with a realistic batch of 12 jobs the program crashes almost
 // immediately with:
@@ -65,7 +65,7 @@ func main() {
 
 	batch := makeJobs(12)
 
-	// Buffers sized for a "typical" burst; see the unit tests.
+	// Buffers sized for a "typical" burst; matched the 4-job smoke test.
 	jobs := make(chan Job, 4)
 	reports := make(chan Report, 2)
 

@@ -1,0 +1,47 @@
+diff --git i/01-race-detector/exercises/ex2-map/main.go w/01-race-detector/exercises/ex2-map/main.go
+index e8b6a5f..b3ced71 100644
+--- i/01-race-detector/exercises/ex2-map/main.go
++++ w/01-race-detector/exercises/ex2-map/main.go
+@@ -5,6 +5,7 @@ import (
+ 	"maps"
+ 	"math/rand"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ )
+ 
+@@ -24,7 +25,7 @@ type Service struct {
+ type CachedResult struct {
+ 	Value      string
+ 	ComputedAt time.Time
+-	HitCount   int
++	HitCount   atomic.Int64
+ }
+ 
+ // NewService creates a new service instance
+@@ -44,7 +45,7 @@ func (s *Service) GetFromCache(key string) (*CachedResult, bool) {
+ 
+ 	if exists {
+ 		// Increment hit count
+-		result.HitCount++
++		result.HitCount.Add(1)
+ 		s.RecordMetric("cache.hits")
+ 		return result, true
+ 	}
+@@ -60,7 +61,6 @@ func (s *Service) StoreInCache(key string, value string) {
+ 	s.cache[key] = &CachedResult{
+ 		Value:      value,
+ 		ComputedAt: time.Now(),
+-		HitCount:   0,
+ 	}
+ }
+ 
+@@ -78,7 +78,7 @@ func (s *Service) GetCacheStats() (entries int, totalHits int) {
+ 	defer s.cacheMu.RUnlock()
+ 	for _, result := range s.cache {
+ 		entries++
+-		totalHits += result.HitCount
++		totalHits += int(result.HitCount.Load())
+ 	}
+ 	return entries, totalHits
+ }

@@ -1,0 +1,58 @@
+diff --git i/02-execution-tracer/exercises/ex4-traceagent/analyzer/analyzer.go w/02-execution-tracer/exercises/ex4-traceagent/analyzer/analyzer.go
+index e4f4a82..f968a6c 100644
+--- i/02-execution-tracer/exercises/ex4-traceagent/analyzer/analyzer.go
++++ w/02-execution-tracer/exercises/ex4-traceagent/analyzer/analyzer.go
+@@ -104,7 +104,10 @@ func AnalyzeFile(p string) (*Summary, error) {
+ // -1 for states we don't account for (undetermined / not yet existing) —
+ // skip the charge for those, but still advance g.since.
+ func (a *analysis) recordStateTime(g *gInfo, from trace.GoState, ts trace.Time) {
+-	// TODO 1: your code here (~4 lines). Solution in README.md.
++	if b := bucket(from); b >= 0 {
++		g.buckets[b] += ts.Sub(g.since)
++	}
++	g.since = ts
+ }
+ 
+ // TODO 2: recordBlocking aggregates blocked time by blocking site.
+@@ -119,7 +122,24 @@ func (a *analysis) recordStateTime(g *gInfo, from trace.GoState, ts trace.Time)
+ //     bump count, add to total, raise max. Allocate the *blockAgg on first
+ //     use, and clear g.blockSite/g.blockReason when done.
+ func (a *analysis) recordBlocking(g *gInfo, from, to trace.GoState, ts trace.Time, st trace.StateTransition) {
+-	// TODO 2: your code here (~18 lines). Solution in README.md.
++	if to == trace.GoWaiting && from != trace.GoWaiting {
++		g.blockReason = st.Reason
++		g.blockSite = siteOf(st.Stack)
++		return
++	}
++	if from == trace.GoWaiting && to != trace.GoWaiting && g.blockSite != "" {
++		d := ts.Sub(g.since)
++		k := blockKey{site: g.blockSite, reason: g.blockReason}
++		b := a.blocks[k]
++		if b == nil {
++			b = &blockAgg{}
++			a.blocks[k] = b
++		}
++		b.count++
++		b.total += d
++		b.max = max(b.max, d)
++		g.blockSite, g.blockReason = "", ""
++	}
+ }
+ 
+ // TODO 3: recordSchedWait records scheduler latency. A Runnable→Running edge
+@@ -128,7 +148,14 @@ func (a *analysis) recordBlocking(g *gInfo, from, to trace.GoState, ts trace.Tim
+ // Raise g.maxSchedWait if this wait beats it, and if the wait is at least
+ // minSchedWait, append a schedWaitEv{g, g.since, wait} to a.schedWaits.
+ func (a *analysis) recordSchedWait(g *gInfo, from, to trace.GoState, ts trace.Time) {
+-	// TODO 3: your code here (~8 lines). Solution in README.md.
++	if from != trace.GoRunnable || to != trace.GoRunning {
++		return
++	}
++	wait := ts.Sub(g.since)
++	g.maxSchedWait = max(g.maxSchedWait, wait)
++	if wait >= minSchedWait {
++		a.schedWaits = append(a.schedWaits, schedWaitEv{g: g, at: g.since, wait: wait})
++	}
+ }
+ 
+ // ────────────────────────── your part ends here ──────────────────────────

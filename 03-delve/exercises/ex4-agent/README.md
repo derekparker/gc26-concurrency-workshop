@@ -9,8 +9,8 @@ evidence-gathering moves you just practiced by hand.
 **There is no new program in this exercise.** The debuggee is
 [`ex2-dispatcher`](../ex2-dispatcher/), whose deadlock is fully
 deterministic, so this exercise reproduces the same way every time.
-Everything below was captured for real with `mcp-dap-server` (installed
-2026-07-15, pseudo-version `v0.0.0-20260618220505`), Delve 1.27.0, Go
+Everything below was captured for real with `mcp-dap-server` (pseudo-version
+`v0.0.0-20260723000135-ca7f841a8ab2`, verified 2026-07-31), Delve 1.27.0, Go
 1.26, and Claude Code 2.1.x.
 
 ## What This Is
@@ -31,7 +31,8 @@ debugger operations you've already used this session.
 The tool surface is deliberately small and **dynamic**: before a session
 starts the agent sees exactly one tool, `debug` (launch from source or
 binary, open a core dump, or attach to a PID, Delve for Go, GDB for
-C/C++/Rust). The moment a session is live, twelve more appear:
+C/C++/Rust). The moment a session is live, `debug` is *replaced* by twelve
+session tools:
 
 ```
 breakpoint, clear-breakpoints, continue, step, pause, restart, stop,
@@ -111,16 +112,21 @@ File: /usr/local/go/src/runtime/panic.go:1241
 
 ```
 Threads:
-  Thread 1:  [Go 1]  main.main
-  Thread 2:  [Go 2]  runtime.gopark
+  Thread 1: [Go 1] main.main
+  Thread 2: [Go 2] runtime.gopark
   ...
-  Thread 19: [Go 19] main.worker
-  Thread 20: [Go 20] main.worker
-  Thread 21: [Go 21] main.worker
+  Thread 35: [Go 35] main.worker
+  Thread 36: [Go 36] main.worker
+  Thread 37: [Go 37] main.worker
 ```
 
+The deadlock is deterministic; the goroutine IDs are not. Across runs the
+three workers landed on 35/36/37 and 7/8/9 — read them off `info threads`
+rather than assuming.
+
 **4. `context`** per goroutine, `{}` for the current one (main), then
-`{"threadId": 19}` etc. Each returns a stack with frame IDs:
+`{"threadId": <one of the main.worker thread IDs>}`. Each returns a stack
+with frame IDs:
 
 ```
 #1 (Frame ID: 1009) runtime.chansend at /usr/local/go/src/runtime/chan.go:283
@@ -174,9 +180,9 @@ cycle from exercise 2, and a good run will do exactly that.
   Nudge: *"clear all breakpoints (`{\"all\": true}`) and continue to the
   fatal error."* (`clear-breakpoints` with `{}` is an error, it needs
   `file`, `function`, or `all`.)
-- **Session wedged / double `debug` call.** Have the agent call `stop`
-  (or `restart`) and relaunch. Worst case: `/mcp` → reconnect the
-  server, then re-prompt with "resume: launch the dispatcher again".
+- **Session wedged.** Have the agent call `stop` (or `restart`) and
+  relaunch. Worst case: `/mcp` → reconnect the server, then re-prompt with
+  "resume: launch the dispatcher again".
 - **It starts reading main.go.** Deny the permission prompt and let the
   denial do the teaching, the prompt said debugger only.
 
@@ -199,14 +205,16 @@ echo "This program deadlocks... (prompt as above)" | \
   --allowedTools "mcp__debugger"
 ```
 
-where `mcp.json` is `{"mcpServers": {"debugger": {"command": "<path>/mcp-dap-server"}}}`.
+`mcp.json` is committed alongside this README and resolves
+`mcp-dap-server` off your `PATH`. If `$(go env GOPATH)/bin` isn't on your
+`PATH`, replace `"command"` with the absolute path.
 
 Verified against this exact exercise: the one-shot run came back with the
 complete cycle, main parked on `jobs` (4/4) holding job 10, all three
-workers parked on `reports` (2/2) holding jobs 1/4/5, "the accounting
-closes exactly", plus the structural fix, and it even told the two
-channels apart by their lock addresses in the `gopark` frames, a trick
-nobody demonstrated for it.
+workers parked on `reports` (2/2) holding three of the in-flight jobs (the
+IDs vary), "the accounting closes exactly", plus the structural fix, and
+it even told the two channels apart by their lock addresses in the
+`gopark` frames, a trick nobody demonstrated for it.
 
 ## Discussion: Agent vs. Human at the Prompt
 

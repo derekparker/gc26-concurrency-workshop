@@ -55,7 +55,10 @@ func topBlocking(ctx context.Context, req *mcp.CallToolRequest, args topBlocking
 	}
 	n := args.N
 	if n <= 0 {
-		n = 5
+		// 10, not 5: the top entries on a real trace are usually runtime
+		// noise (time.Sleep, gopark, the trace advancer), so a smaller
+		// default buries the interesting application-level blocking.
+		n = 10
 	}
 	var out strings.Builder
 	out.WriteString(fmt.Sprintf("top %d blocking sites (of %d) over %v:\n", n, len(s.TopBlocking), s.TraceDuration))
