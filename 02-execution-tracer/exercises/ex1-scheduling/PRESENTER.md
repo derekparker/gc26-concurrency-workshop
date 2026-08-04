@@ -274,3 +274,11 @@ answers are the teachable part.
   `-pprof=sched` invocation. It renders in a terminal in a second.
 - Chromium tab is the only place **View trace by proc** works. Have Chrome
   open before you start; Safari renders a broken timeline.
+
+## Wrap-up
+Close with the bridge to exercise 2, it's the setup for the whole next
+exercise: *"You could afford to wrap the whole run in `trace.Start` here
+because the failure is reproducible on demand — run it a few times, catch a
+bad p99, done. A production incident that surfaces twice an hour and is gone
+by the time you open a dashboard isn't so cooperative, and you can't leave
+`trace.Start` running for hours hoping to catch it. That's exercise 2."*
