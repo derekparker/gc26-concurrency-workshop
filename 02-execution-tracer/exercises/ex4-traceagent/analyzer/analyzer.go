@@ -104,10 +104,7 @@ func AnalyzeFile(p string) (*Summary, error) {
 // -1 for states we don't account for (undetermined / not yet existing) —
 // skip the charge for those, but still advance g.since.
 func (a *analysis) recordStateTime(g *gInfo, from trace.GoState, ts trace.Time) {
-	if b := bucket(from); b >= 0 {
-		g.buckets[b] += ts.Sub(g.since)
-	}
-	g.since = ts
+	// TODO 1: your code here (~4 lines). Solution in README.md.
 }
 
 // TODO 2: recordBlocking aggregates blocked time by blocking site.
@@ -122,24 +119,7 @@ func (a *analysis) recordStateTime(g *gInfo, from trace.GoState, ts trace.Time) 
 //     bump count, add to total, raise max. Allocate the *blockAgg on first
 //     use, and clear g.blockSite/g.blockReason when done.
 func (a *analysis) recordBlocking(g *gInfo, from, to trace.GoState, ts trace.Time, st trace.StateTransition) {
-	if to == trace.GoWaiting && from != trace.GoWaiting {
-		g.blockReason = st.Reason
-		g.blockSite = siteOf(st.Stack)
-		return
-	}
-	if from == trace.GoWaiting && to != trace.GoWaiting && g.blockSite != "" {
-		d := ts.Sub(g.since)
-		k := blockKey{site: g.blockSite, reason: g.blockReason}
-		b := a.blocks[k]
-		if b == nil {
-			b = &blockAgg{}
-			a.blocks[k] = b
-		}
-		b.count++
-		b.total += d
-		b.max = max(b.max, d)
-		g.blockSite, g.blockReason = "", ""
-	}
+	// TODO 2: your code here (~18 lines). Solution in README.md.
 }
 
 // TODO 3: recordSchedWait records scheduler latency. A Runnable→Running edge
@@ -148,14 +128,7 @@ func (a *analysis) recordBlocking(g *gInfo, from, to trace.GoState, ts trace.Tim
 // Raise g.maxSchedWait if this wait beats it, and if the wait is at least
 // minSchedWait, append a schedWaitEv{g, g.since, wait} to a.schedWaits.
 func (a *analysis) recordSchedWait(g *gInfo, from, to trace.GoState, ts trace.Time) {
-	if from != trace.GoRunnable || to != trace.GoRunning {
-		return
-	}
-	wait := ts.Sub(g.since)
-	g.maxSchedWait = max(g.maxSchedWait, wait)
-	if wait >= minSchedWait {
-		a.schedWaits = append(a.schedWaits, schedWaitEv{g: g, at: g.since, wait: wait})
-	}
+	// TODO 3: your code here (~8 lines). Solution in README.md.
 }
 
 // ────────────────────────── your part ends here ──────────────────────────
