@@ -40,9 +40,13 @@ Each part contains:
 - Basic Go experience (6+ months)
 - Familiarity with goroutines and channels
 
-All demos and exercises run fully offline, no conference-WiFi dependency.
-The only network access needed is a one-time `go mod download` for the
-Part II capstone (pre-fetch it before the workshop).
+Once you're set up, all demos and exercises run offline. Three things need
+network, all of them one-time and all of them best done *before* you start:
+
+- `go mod download` for the Part II capstone (8 modules, ~49 MB)
+- `go install github.com/go-delve/delve/cmd/dlv@latest` (`setup.sh` does it)
+- `go install github.com/go-delve/mcp-dap-server@latest`, only for the
+  Part III bonus finale
 
 ## Repository Structure
 
@@ -56,6 +60,8 @@ scripts/             # Utility scripts (exercise checker)
 ## Getting Help
 
 - Run `./scripts/exercise_checker.sh` to validate your exercise solutions
-- Run `./cleanup.sh` to reset the repo to a pristine state between attempts
+- Run `./cleanup.sh` to sweep generated artifacts (traces, profiles, built
+  binaries) between attempts. It deliberately leaves your code edits alone —
+  for a full reset, follow it with `git checkout -- .`
 
 Happy debugging! 🐛➡️✅
