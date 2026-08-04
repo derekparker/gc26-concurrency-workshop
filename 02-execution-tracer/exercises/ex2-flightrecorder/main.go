@@ -49,7 +49,7 @@ type service struct {
 }
 
 // handle serves one request: look up an entry and render a response.
-func (s *service) handle(ctx context.Context, id int) string {
+func (s *service) handle(id int) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	v := s.cache[id%cacheEntries]
@@ -113,7 +113,7 @@ func (s *service) worker(ctx context.Context, w int, stop <-chan struct{}, laten
 
 		start := time.Now()
 		trace.WithRegion(ctx, "handle request", func() {
-			s.handle(ctx, rand.IntN(cacheEntries))
+			s.handle(rand.IntN(cacheEntries))
 		})
 		elapsed := time.Since(start)
 		latencies <- elapsed
