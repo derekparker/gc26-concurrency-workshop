@@ -79,6 +79,12 @@ them straight from this file to a terminal.
    - `service.refresh`: the `n%4 != 3` early return is the *cheap* path
      (touch 100 entries and leave). The whole-map rebuild is what falls
      through on `n%4 == 3`, and it runs while `s.mu.Lock()` is held.
+   - The `trace.WithRegion(ctx, "refresh cache", ...)` wrapping all of
+     `refresh`, and the `trace.NewTask`/`trace.WithRegion(ctx, "handle
+     request", ...)` in `worker` — this instrumentation already ships in
+     the starter file, unrelated to the two TODOs. Call it out now so the
+     `refresh cache` name doesn't look like it came from nowhere when it
+     shows up on the User-defined regions page in step 10.
    - The `TODO 1` and `TODO 2` comments.
 
 2. **Run it unmodified.**
@@ -180,10 +186,14 @@ them straight from this file to a terminal.
      bursts of activity across the P rows as 8 workers churn through
      sub-ms requests.
    - Then: a wide, ~270ms stretch where **one** goroutine runs on one P and
-     the other rows are dead quiet. Click it: `main.(*service).refresher`,
-     inside the `refresh cache` region.
-   - Point at the `refresh cache` region bar — a task/region we set up in
-     the demo, doing its job here.
+     the other rows are dead quiet. Click it: the slice is labeled
+     `main.(*service).refresher`.
+   - Don't claim you can click into a `refresh cache` box here — `go tool
+     trace`'s by-proc (and by-goroutine) timeline doesn't render region
+     names as their own slices, only the enclosing goroutine's name. The
+     region only surfaces by name on the **User-defined regions** page
+     (step 10). Say instead: *"That's the refresher — we'll confirm it's
+     inside the `refresh cache` region a couple of views from now."*
 
 8. **Goroutine analysis.**
    - `main.(*service).worker` — Count 8, with a **~255ms Block time (sync)**
