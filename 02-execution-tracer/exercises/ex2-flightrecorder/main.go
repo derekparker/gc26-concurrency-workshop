@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
-	"os"
 	"runtime/trace"
 	"sync"
 	"time"
@@ -43,11 +42,6 @@ const (
 // MinAge and MaxBytes — and Start() it before the workers launch.
 //
 // https://pkg.go.dev/runtime/trace#FlightRecorder
-
-var (
-	fr           *trace.FlightRecorder
-	snapshotOnce sync.Once
-)
 
 type service struct {
 	mu    sync.RWMutex
@@ -124,24 +118,13 @@ func (s *service) worker(ctx context.Context, w int, stop <-chan struct{}, laten
 		elapsed := time.Since(start)
 		latencies <- elapsed
 
-		if elapsed > slowThreshold && fr.Enabled() {
+		if elapsed > slowThreshold {
 			log.Printf("SLOW request: %v (threshold %v)", elapsed, slowThreshold)
-			go snapshotOnce.Do(func() {
-				f, err := os.Create("flightrecorder.trace")
-				if err != nil {
-					log.Printf("creating snapshot file: %v", err)
-					return
-				}
-				defer f.Close()
-				if _, err := fr.WriteTo(f); err != nil {
-					log.Printf("writing snapshot: %v", err)
-					return
-				}
-				fr.Stop()
-				log.Printf("wrote flight recorder snapshot to flightrecorder.trace")
-			})
+			// TODO 2: this is the "rare event just happened" moment.
+			// Snapshot the flight recorder to flightrecorder.trace —
+			// exactly once (sync.Once), and in a new goroutine so the
+			// worker isn't stalled while the snapshot is written.
 		}
-
 	}
 }
 
@@ -155,15 +138,6 @@ func main() {
 
 	var bg sync.WaitGroup
 	bg.Add(1 + numWorkers)
-	fr = trace.NewFlightRecorder(trace.FlightRecorderConfig{
-		MinAge:   5 * time.Second, // keep >= last 5s of trace...
-		MaxBytes: 16 << 20,        // ...but never more than ~16 MiB
-	})
-	if err := fr.Start(); err != nil {
-		log.Fatal(err)
-	}
-	defer fr.Stop()
-
 	go svc.refresher(ctx, stop, &bg)
 	for w := range numWorkers {
 		go svc.worker(ctx, w, stop, latencies, &bg)
