@@ -129,3 +129,9 @@ milliseconds, and the goroutine count drops from ~1000 to ~10.
 "Runnable" is the most underrated state in the trace viewer. CPU profilers
 sample *running* code; logs record what *ran*. Only the tracer records the
 time between "ready" and "running", and that's where tail latency hides.
+
+You could afford to wrap the whole run in `trace.Start` here because the
+failure is reproducible on demand: run it a few times, catch a bad p99, done.
+A production incident that surfaces twice an hour and is gone by the time you
+open a dashboard isn't so cooperative, and you can't leave `trace.Start`
+running for hours hoping to catch it. That's exercise 2.
