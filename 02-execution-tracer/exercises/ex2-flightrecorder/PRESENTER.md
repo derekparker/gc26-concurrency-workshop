@@ -141,7 +141,6 @@ them straight from this file to a terminal.
                log.Printf("writing snapshot: %v", err)
                return
            }
-           fr.Stop()
            log.Printf("wrote flight recorder snapshot to flightrecorder.trace")
        })
    }
@@ -159,6 +158,13 @@ them straight from this file to a terminal.
      you've already stopped the recorder.
    - The detect-then-`WriteTo` pattern is the point: the trigger fires
      *after* the interesting behavior; the ring buffer still contains it.
+   - **Don't call `fr.Stop()` again in here.** `main` already has a
+     `defer fr.Stop()` from TODO 1 — that's the only place it should be
+     called. Calling it a second time from this closure is redundant and
+     was the source of an earlier draft's `-race` warning (`fr.Enabled()`
+     reads racing this `fr.Stop()` write from a different goroutine); the
+     deferred call in `main` is enough to stop the recorder once the run
+     ends.
 
 5. **Run it.**
    ```bash

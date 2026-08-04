@@ -114,7 +114,6 @@ if elapsed > slowThreshold && fr.Enabled() {
 			log.Printf("writing snapshot: %v", err)
 			return
 		}
-		fr.Stop()
 		log.Printf("wrote flight recorder snapshot to flightrecorder.trace")
 	})
 }
