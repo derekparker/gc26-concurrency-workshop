@@ -302,7 +302,7 @@ appetite allow. Stage 2 is the finale-friendly one.
     Paste (adjust the absolute path):
 
     > Here's an execution trace from a Go service with terrible tail
-    > latency: `<absolute path>/02-execution-tracer/exercises/ex1-scheduling/broken.trace`.
+    > latency: `../ex1-scheduling/broken.trace`.
     > Use the gotrace tools to diagnose it. What is wrong, and what
     > would you change in the code?
 
